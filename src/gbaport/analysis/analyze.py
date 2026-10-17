@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from gbaport.analysis.cfg import Program, build_program
 from gbaport.analysis.config import ConfigError, GameConfig
 from gbaport.analysis.discover import Exploration, Issue, explore
+from gbaport.analysis.pointers import pointer_candidates
 from gbaport.analysis.space import CodeSpace
 from gbaport.analysis.traces import Trace, TraceError, targets_by_site
 from gbaport.isa.model import Mode
@@ -56,7 +57,9 @@ def analyze_rom(
     seeds += [(addr, Mode.ARM, "seed") for addr in config.entries]
     seeds += [(addr, Mode.THUMB, "seed") for addr in config.thumb_entries]
     seeds += [(blob.ram, blob.mode, "seed") for blob in config.ram_code]
-    exploration = explore(space, seeds, config, traced=targets_by_site(list(traces)))
+    candidates = pointer_candidates(space) if config.scan_pointers else []
+    traced = targets_by_site(list(traces))
+    exploration = explore(space, seeds, config, traced=traced, candidates=candidates)
     coverage = _coverage(space, exploration, config)
     return Analysis(info, exploration, build_program(exploration), coverage)
 

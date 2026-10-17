@@ -102,3 +102,10 @@ def test_trace_targets_become_functions():
         {"site": "0x080000c4", "targets": ["0x080000c8"]}
     ]
     assert "found by     seed 1, trace 1" in summary_lines(analysis)
+
+
+def test_pointer_scan_finds_callbacks():
+    rom = program_rom("bx lr\n.word cb+1\n.thumb\ncb:\n push {lr}\n pop {r0}\n bx r0")
+    assert analyze_rom(rom).program.functions[0x080000C8].kind == "pointer"
+    without = analyze_rom(rom, GameConfig(scan_pointers=False))
+    assert 0x080000C8 not in without.program.functions

@@ -1,6 +1,9 @@
 """The address space the analyser may decode: ROM, its mirrors, and RAM copies of ROM blobs."""
 
 from gbaport.analysis.config import ConfigError, RamCode
+from gbaport.isa.arm import decode_arm
+from gbaport.isa.model import Instruction, Mode
+from gbaport.isa.thumb import decode_thumb
 from gbaport.rom.image import ROM_BASE, RomError, RomImage
 
 ROM_MIRROR_END = 0x0E000000  # 0x08, 0x0A and 0x0C regions all show the cartridge
@@ -39,6 +42,17 @@ class CodeSpace:
 
     def contains(self, addr: int, size: int = 1) -> bool:
         return self.rom_offset(addr, size) is not None
+
+    def decode(self, addr: int, mode: Mode) -> Instruction | None:
+        """The instruction at ``addr`` in ``mode``, or None outside analysable code."""
+        if mode is Mode.ARM:
+            if not self.contains(addr, 4):
+                return None
+            return decode_arm(self.read32(addr), addr)
+        if not self.contains(addr, 2):
+            return None
+        following = self.read16(addr + 2) if self.contains(addr + 2, 2) else None
+        return decode_thumb(self.read16(addr), addr, following)
 
     def read16(self, addr: int) -> int:
         offset = self._offset(addr, 2)

@@ -245,3 +245,39 @@ def test_trace_gives_an_unbounded_switch_its_cases():
 def test_targets_of_unreached_traced_sites_become_entries():
     ex = explore_program("bx lr\nt: bx lr", traced={0x08000300: ((0x080000C4, Mode.ARM),)})
     assert ex.entry_kinds[0x080000C4] == "trace"
+
+
+# Thumb main calls helper; extra is reachable only through a pointer.
+#   c0 main   c2 bl helper (4 bytes)   ca helper   d0 extra
+WITH_EXTRA = """
+main:
+    push {lr}
+    bl helper
+    pop {r0}
+    bx r0
+helper:
+    push {lr}
+    pop {r0}
+    bx r0
+extra:
+    push {lr}
+    pop {r0}
+    bx r0
+"""
+
+
+def test_candidates_never_split_trusted_code():
+    candidates = [
+        (0x080000C4, Mode.THUMB, "pointer"),  # second half of the bl
+        (0x080000CC, Mode.THUMB, "pointer"),  # inside helper
+        (0x080000D0, Mode.THUMB, "pointer"),
+    ]
+    ex = explore_program(WITH_EXTRA, thumb=True, candidates=candidates)
+    assert ex.entry_kinds == {0x080000C0: "seed", 0x080000CA: "call", 0x080000D0: "pointer"}
+    assert ex.issues == []
+
+
+def test_candidates_never_land_in_data():
+    source = "ldr r0, lit\nbx lr\nlit: .word 0"
+    ex = explore_program(source, candidates=[(0x080000C8, Mode.ARM, "pointer")])
+    assert 0x080000C8 not in ex.entries

@@ -216,7 +216,9 @@ def explore_program(
     config: GameConfig | None = None,
     size: int = 0x400,
     traced: Traced | None = None,
+    candidates: list[tuple[int, Mode, str]] | None = None,
 ) -> Exploration:
     space = program_space(source, thumb=thumb, size=size)
     mode = Mode.THUMB if thumb else Mode.ARM
-    return explore(space, seeds or [(CODE_ADDR, mode, "seed")], config, traced=traced)
+    seeds = seeds or [(CODE_ADDR, mode, "seed")]
+    return explore(space, seeds, config, traced=traced, candidates=candidates or [])

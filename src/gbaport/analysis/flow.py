@@ -50,7 +50,7 @@ def classify(
         return Flow(FlowKind.CALL, (ins.target, ins.mode), falls_through=True)
     if op is Op.BL_LO:  # unpaired second half: calls LR + offset, and LR is unknown here
         return Flow(FlowKind.CALL, None, falls_through=True)
-    if not _writes_pc(ins):
+    if not writes_pc(ins):
         return Flow(FlowKind.NEXT)
     if _is_return(ins, state):
         return Flow(FlowKind.RETURN, falls_through=conditional)
@@ -62,7 +62,8 @@ def classify(
     return Flow(FlowKind.JUMP, target, falls_through=conditional)
 
 
-def _writes_pc(ins: Instruction) -> bool:
+def writes_pc(ins: Instruction) -> bool:
+    """True when ``ins`` may write r15 (``bx`` included)."""
     if ins.op is Op.BX:
         return True
     if ins.op in DATA_PROCESSING_OPS and ins.op not in COMPARE_OPS:

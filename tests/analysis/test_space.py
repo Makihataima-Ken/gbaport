@@ -54,3 +54,12 @@ def test_reads_outside_raise():
 def test_rejects_bad_overlays(blobs, message):
     with pytest.raises(ConfigError, match=message):
         CodeSpace(rom_with_blob(), blobs)
+
+
+def test_decode_in_either_mode():
+    code = bytes.fromhex("1eff2fe1") + bytes.fromhex("00f000f8")  # bx lr; Thumb bl
+    space = CodeSpace(RomImage(build_rom(code=code)))
+    assert space.decode(0x080000C0, Mode.ARM).op.value == "bx"
+    bl = space.decode(0x080000C4, Mode.THUMB)
+    assert (bl.op.value, bl.size) == ("bl", 4)
+    assert space.decode(0x09000000, Mode.ARM) is None

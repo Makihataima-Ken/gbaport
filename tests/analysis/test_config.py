@@ -51,6 +51,11 @@ def test_parses_full_config():
 
 def test_empty_config_has_defaults():
     assert parse_config("") == GameConfig()
+    assert GameConfig().scan_pointers is True
+
+
+def test_pointer_scan_can_be_turned_off():
+    assert parse_config("[code]\nscan_pointers = false").scan_pointers is False
 
 
 @pytest.mark.parametrize(
@@ -62,6 +67,7 @@ def test_empty_config_has_defaults():
         ("[code]\nentries = [true]", "non-negative integer"),
         ("[code]\nentries = 5", "list of addresses"),
         ("[code]\ndata = [[2, 1]]", "is empty"),
+        ("[code]\nscan_pointers = 1", "scan_pointers must be true or false"),
         ("[code]\ndata = [[1, 2, 3]]", "[start, end] pairs"),
         ("[code]\njump_tables = [{ at = 1, count = 2 }]", "missing key(s): table"),
         ("[code]\njump_tables = [{ at = 1, table = 2, count = 0 }]", "at least 1"),

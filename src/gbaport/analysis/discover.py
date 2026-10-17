@@ -27,10 +27,8 @@ from gbaport.analysis.effects import (
 from gbaport.analysis.flow import Flow, FlowKind, classify
 from gbaport.analysis.space import CodeSpace
 from gbaport.analysis.tables import JumpTable, Step, find_jump_table
-from gbaport.isa.arm import decode_arm
 from gbaport.isa.fmt import format_instruction
 from gbaport.isa.model import Cond, Instruction, Mode, Op
-from gbaport.isa.thumb import decode_thumb
 
 IRQ_VECTOR = 0x03007FFC  # the BIOS enters the IRQ handler stored here, in ARM state
 HISTORY_LIMIT = 16
@@ -70,6 +68,7 @@ def explore(
     config: GameConfig | None = None,
     *,
     traced: Traced | None = None,
+    candidates: list[tuple[int, Mode, str]] | None = None,
 ) -> Exploration:
     """Discover the code reachable from ``seeds`` of (address, mode, entry kind).
 
@@ -79,7 +78,9 @@ def explore(
     finds no new one (the set only grows, so this ends).
 
     ``traced`` resolves the indirect sites a walk reaches; targets of traced
-    sites no walk reaches become entries of their own.
+    sites no walk reaches become entries of their own. ``candidates`` are
+    guessed entries (pointer scan), walked one by one after all of that, and
+    skipped when they land in code or data already found.
     """
     config = config or GameConfig()
     traced = {space.canonical(site): hits for site, hits in (traced or {}).items()}
@@ -90,6 +91,7 @@ def explore(
             explorer.add_entry(addr, mode, kind, origin=addr)
         explorer.drain()
         explorer.drain_traces()
+        explorer.drain_candidates(candidates or [])
         if explorer.targets <= leaders:
             return explorer.ex
         leaders |= explorer.targets
@@ -127,6 +129,20 @@ class _Explorer:
                 done.add(site)
                 for target, mode in self.traced[site]:
                     self.add_entry(target, mode, "trace", origin=site)
+            self.drain()
+
+    def drain_candidates(self, candidates: list[tuple[int, Mode, str]]) -> None:
+        """Walk each guessed entry on its own, unless it lands in code or data already found."""
+        for addr, mode, kind in candidates:
+            addr = self.space.canonical(addr)
+            covering = self.ex.instructions.get(addr - 2)
+            if (
+                addr in self.ex.instructions
+                or (covering is not None and covering.size == 4)
+                or self._is_data(addr)
+            ):
+                continue
+            self.add_entry(addr, mode, kind, origin=addr)
             self.drain()
 
     def issue(self, addr: int, kind: str, detail: str) -> None:
@@ -208,7 +224,7 @@ class _Explorer:
         if self._is_data(addr):
             self.issue(addr, "enters_data", "walked into a [code] data range or a literal pool")
             return None
-        ins = self._decode(addr, mode)
+        ins = self.space.decode(addr, mode)
         if ins is None:
             self.issue(addr, "outside_code", "walked off the end of analysable code")
             return None
@@ -218,15 +234,6 @@ class _Explorer:
         self.ex.instructions[addr] = ins
         return ins
 
-    def _decode(self, addr: int, mode: Mode) -> Instruction | None:
-        if mode is Mode.ARM:
-            if not self.space.contains(addr, 4):
-                return None
-            return decode_arm(self.space.read32(addr), addr)
-        if not self.space.contains(addr, 2):
-            return None
-        following = self.space.read16(addr + 2) if self.space.contains(addr + 2, 2) else None
-        return decode_thumb(self.space.read16(addr), addr, following)
 
     def _is_data(self, addr: int) -> bool:
         if any(start <= addr < end for start, end in self.data):
@@ -317,7 +324,7 @@ class _Explorer:
 
     def _veneer_register(self, target: int, mode: Mode) -> int | None:
         """N if ``target`` is a ``bx rN`` call veneer (like agbcc's ``_call_via_rN``)."""
-        ins = self._decode(self.space.canonical(target), mode)
+        ins = self.space.decode(self.space.canonical(target), mode)
         if ins is not None and ins.op is Op.BX and ins.cond is Cond.AL and ins.rm not in (LR, PC):
             return ins.rm
         return None

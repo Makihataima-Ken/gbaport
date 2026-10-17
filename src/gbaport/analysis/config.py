@@ -41,11 +41,12 @@ class GameConfig:
     jump_tables: tuple[JumpTableOverride, ...] = ()
     ram_code: tuple[RamCode, ...] = ()
     timing_model: str = "block"
+    scan_pointers: bool = True  # guess entries from ROM words that point at function starts
 
 
 _SECTIONS = {
     "rom": {"sha1", "save"},
-    "code": {"entries", "thumb_entries", "data", "jump_tables"},
+    "code": {"entries", "thumb_entries", "data", "jump_tables", "scan_pointers"},
     "timing": {"model"},
 }
 _RAM_CODE_KEYS = {"rom", "ram", "size", "mode"}
@@ -82,6 +83,7 @@ def parse_config(text: str, source: str = "game.toml") -> GameConfig:
         ),
         ram_code=tuple(_ram_code(item, source) for item in _tables(doc, "ram_code", source)),
         timing_model=_timing(timing, source),
+        scan_pointers=_flag(code, "scan_pointers", True, source),
     )
 
 
@@ -102,6 +104,13 @@ def _section(doc: dict, name: str, source: str) -> dict:
 def _int(value: object, where: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise ConfigError(f"{where}: expected a non-negative integer, got {value!r}")
+    return value
+
+
+def _flag(table: dict, key: str, default: bool, source: str) -> bool:
+    value = table.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{source}: {key} must be true or false, got {value!r}")
     return value
 
 
