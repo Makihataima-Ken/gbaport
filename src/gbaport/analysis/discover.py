@@ -6,8 +6,9 @@ Each linear walk tracks register constants (reset at the start of every walk
 and at every address other paths also reach), so ``ldr r0, =func; bx r0``
 style transfers resolve. A constant a walk leaves in LR when it leaves for
 elsewhere (``ldr lr, =main; b init``) is where that code returns to, so it
-becomes an entry too. Anything the walk cannot follow becomes an ``Issue``;
-nothing in the ROM can make it raise.
+becomes an entry too. Indirect transfers the walk cannot resolve take their
+targets from recorded traces when there are any. Anything else the walk
+cannot follow becomes an ``Issue``; nothing in the ROM can make it raise.
 """
 
 from collections import deque
@@ -56,10 +57,19 @@ class Exploration:
     literals: dict[int, int] = field(default_factory=dict)  # address -> size
     tables: list[JumpTable] = field(default_factory=list)
     issues: list[Issue] = field(default_factory=list)
+    # Indirect site -> targets taken from traces: callees, switch cases, or functions it leaves for.
+    traced: dict[int, tuple[int, ...]] = field(default_factory=dict)
+
+
+Traced = dict[int, tuple[tuple[int, Mode], ...]]  # site -> (target, mode) seen in traces
 
 
 def explore(
-    space: CodeSpace, seeds: list[tuple[int, Mode, str]], config: GameConfig | None = None
+    space: CodeSpace,
+    seeds: list[tuple[int, Mode, str]],
+    config: GameConfig | None = None,
+    *,
+    traced: Traced | None = None,
 ) -> Exploration:
     """Discover the code reachable from ``seeds`` of (address, mode, entry kind).
 
@@ -67,22 +77,30 @@ def explore(
     paths reach those too. Which addresses those are is only known after a
     pass, so discovery repeats with every target found so far until a pass
     finds no new one (the set only grows, so this ends).
+
+    ``traced`` resolves the indirect sites a walk reaches; targets of traced
+    sites no walk reaches become entries of their own.
     """
     config = config or GameConfig()
+    traced = {space.canonical(site): hits for site, hits in (traced or {}).items()}
     leaders: frozenset[int] = frozenset()
     while True:
-        explorer = _Explorer(space, config, leaders)
+        explorer = _Explorer(space, config, leaders, traced)
         for addr, mode, kind in seeds:
             explorer.add_entry(addr, mode, kind, origin=addr)
         explorer.drain()
+        explorer.drain_traces()
         if explorer.targets <= leaders:
             return explorer.ex
         leaders |= explorer.targets
 
 
 class _Explorer:
-    def __init__(self, space: CodeSpace, config: GameConfig, leaders: frozenset[int]) -> None:
+    def __init__(
+        self, space: CodeSpace, config: GameConfig, leaders: frozenset[int], traced: Traced
+    ) -> None:
         self.space = space
+        self.traced = traced
         self.data = config.data
         self.overrides = {table.at: table for table in config.jump_tables}
         self.leaders = leaders  # join points: walks reaching them forget their constants
@@ -93,6 +111,23 @@ class _Explorer:
     def drain(self) -> None:
         while self.work:
             self.walk(*self.work.popleft())
+
+    def drain_traces(self) -> None:
+        """Targets of traced sites no walk reached become entries themselves."""
+        done: set[int] = set()
+        while True:
+            pending = [
+                site
+                for site in sorted(self.traced)
+                if site not in done and site not in self.ex.instructions
+            ]
+            if not pending:
+                return
+            for site in pending:
+                done.add(site)
+                for target, mode in self.traced[site]:
+                    self.add_entry(target, mode, "trace", origin=site)
+            self.drain()
 
     def issue(self, addr: int, kind: str, detail: str) -> None:
         self.ex.issues.append(Issue(addr, kind, detail))
@@ -265,7 +300,10 @@ class _Explorer:
 
     def _call(self, ins: Instruction, flow: Flow, state: RegState) -> None:
         if flow.target is None:
-            self.issue(ins.addr, "unresolved_call", f"{format_instruction(ins)}: target unknown")
+            if not self._traced_call(ins):
+                self.issue(
+                    ins.addr, "unresolved_call", f"{format_instruction(ins)}: target unknown"
+                )
             return
         target, mode = flow.target
         register = self._veneer_register(target, mode)
@@ -287,17 +325,33 @@ class _Explorer:
     def _call_through(self, register: int, ins: Instruction, state: RegState) -> int | None:
         value = state.value(register, ins)
         if value is None:
-            self.issue(
-                ins.addr,
-                "unresolved_call",
-                f"call through a bx r{register} veneer with r{register} unknown",
-            )
+            if not self._traced_call(ins):
+                self.issue(
+                    ins.addr,
+                    "unresolved_call",
+                    f"call through a bx r{register} veneer with r{register} unknown",
+                )
             return None
         target, mode = interwork_target(value)
         return self.add_entry(target, mode, "call", origin=ins.addr)
 
+    def _traced_call(self, ins: Instruction) -> bool:
+        """Take an unknown call's callees from the traces; False when no trace saw it."""
+        added = [
+            self.add_entry(target, mode, "trace", origin=ins.addr)
+            for target, mode in self.traced.get(ins.addr, ())
+        ]
+        callees = tuple(sorted({entry for entry in added if entry is not None}))
+        if callees:
+            self.ex.calls[ins.addr] = callees
+            self.ex.traced[ins.addr] = callees
+        return bool(callees)
+
     def _indirect(self, ins: Instruction, history: list[Step]) -> tuple[int, ...]:
         match = find_jump_table(ins, history, self.space, self.overrides)
+        hits = self.traced.get(ins.addr, ())
+        if hits and (match is None or match.table is None):
+            return self._traced_jump(ins, hits, switch=match is not None)
         if match is None:
             if self.ex.entry_kinds.get(ins.addr) != "veneer":
                 self.issue(
@@ -317,3 +371,20 @@ class _Explorer:
                 self.ex.literals.setdefault(table.table + 4 * i, 4)
         targets = (self.add_branch(t, table.mode, origin=ins.addr) for t in table.targets)
         return tuple(t for t in targets if t is not None)
+
+    def _traced_jump(
+        self, ins: Instruction, hits: tuple[tuple[int, Mode], ...], switch: bool
+    ) -> tuple[int, ...]:
+        """Traced targets of an indirect jump: cases of a ``switch``, or entries it leaves for.
+
+        Returns the successors inside the function (none when the jump leaves it).
+        """
+        if switch:
+            found = [self.add_branch(target, mode, origin=ins.addr) for target, mode in hits]
+        else:
+            found = [
+                self.add_entry(target, mode, "trace", origin=ins.addr) for target, mode in hits
+            ]
+        targets = tuple(sorted({t for t in found if t is not None}))
+        self.ex.traced[ins.addr] = targets
+        return targets if switch else ()

@@ -28,7 +28,7 @@ class Block:
 class Function:
     entry: int
     mode: Mode
-    kind: str  # how it was found: seed, call, veneer, jump, irq or return
+    kind: str  # how it was found: seed, call, veneer, jump, irq, return or trace
     blocks: tuple[int, ...]
     calls: tuple[int, ...]
     tail_calls: tuple[int, ...]
@@ -104,6 +104,8 @@ def _function(ex: Exploration, blocks: dict[int, Block], entry: int) -> Function
     addrs = [ins.addr for start in seen for ins in blocks[start].instructions]
     calls = {callee for addr in addrs for callee in ex.calls.get(addr, ())}
     tails |= {ex.jumps[addr] for addr in addrs if addr in ex.jumps}
+    jumped = [addr for addr in addrs if addr in ex.traced and addr not in ex.calls]
+    tails |= {t for addr in jumped for t in ex.traced[addr] if t in ex.entries}
     return Function(
         entry=entry,
         mode=ex.entries[entry],

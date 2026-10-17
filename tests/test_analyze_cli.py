@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from ksasm import assemble
@@ -44,3 +45,27 @@ def test_bad_config_is_an_error(tmp_path, capsys, monkeypatch):
     args = ["analyze", str(write(tmp_path, program_rom("bx lr"))), "--config", str(bad)]
     assert main(args) == 1
     assert "unknown key(s): bogus" in capsys.readouterr().err
+
+
+def test_trace_option_and_traces_folder(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rom = program_rom("ldr r0, [r1]\nbx r0\nt: bx lr")
+    path = write(tmp_path, rom)
+    text = f"gbaport-trace/1 {hashlib.sha1(rom.data).hexdigest()}\n080000c4 080000c8 arm\n"
+    (tmp_path / "run.trace").write_text(text)
+    assert main(["analyze", str(path), "--trace", "run.trace"]) == 0
+    assert "seed 1, trace 1" in capsys.readouterr().out
+    folder = tmp_path / "games" / "ATST" / "traces"
+    folder.mkdir(parents=True)
+    (folder / "mgba.trace").write_text(text)
+    assert main(["analyze", str(path)]) == 0
+    out = capsys.readouterr().out
+    assert "mgba.trace" in out and "seed 1, trace 1" in out
+
+
+def test_trace_of_another_rom_is_an_error(tmp_path, capsys, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "other.trace").write_text("gbaport-trace/1 " + "0" * 40 + "\n")
+    args = ["analyze", str(write(tmp_path, program_rom("bx lr"))), "--trace", "other.trace"]
+    assert main(args) == 1
+    assert "sha1" in capsys.readouterr().err

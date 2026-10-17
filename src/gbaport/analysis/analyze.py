@@ -7,6 +7,7 @@ from gbaport.analysis.cfg import Program, build_program
 from gbaport.analysis.config import ConfigError, GameConfig
 from gbaport.analysis.discover import Exploration, Issue, explore
 from gbaport.analysis.space import CodeSpace
+from gbaport.analysis.traces import Trace, TraceError, targets_by_site
 from gbaport.isa.model import Mode
 from gbaport.rom.image import HEADER_SIZE, ROM_BASE, RomImage
 from gbaport.rom.info import RomInfo, inspect_rom
@@ -35,13 +36,18 @@ class Analysis:
     coverage: Coverage
 
 
-def analyze_rom(rom: RomImage, config: GameConfig | None = None) -> Analysis:
+def analyze_rom(
+    rom: RomImage, config: GameConfig | None = None, traces: tuple[Trace, ...] = ()
+) -> Analysis:
     config = config or GameConfig()
     info = inspect_rom(rom)
     if config.rom_sha1 is not None and config.rom_sha1 != info.sha1:
         raise ConfigError(
             f"game.toml is for ROM sha1 {config.rom_sha1}, but this ROM is {info.sha1}"
         )
+    for trace in traces:
+        if trace.sha1 != info.sha1:
+            raise TraceError(f"trace is for ROM sha1 {trace.sha1}, but this ROM is {info.sha1}")
     space = CodeSpace(rom, config.ram_code)
     for start, end in config.data:
         if not rom.contains(space.canonical(start), end - start):
@@ -50,7 +56,7 @@ def analyze_rom(rom: RomImage, config: GameConfig | None = None) -> Analysis:
     seeds += [(addr, Mode.ARM, "seed") for addr in config.entries]
     seeds += [(addr, Mode.THUMB, "seed") for addr in config.thumb_entries]
     seeds += [(blob.ram, blob.mode, "seed") for blob in config.ram_code]
-    exploration = explore(space, seeds, config)
+    exploration = explore(space, seeds, config, traced=targets_by_site(list(traces)))
     coverage = _coverage(space, exploration, config)
     return Analysis(info, exploration, build_program(exploration), coverage)
 
@@ -96,6 +102,10 @@ def analysis_to_dict(analysis: Analysis) -> dict:
             for t in ex.tables
         ],
         "literals": [{"addr": _hex(a), "size": size} for a, size in sorted(ex.literals.items())],
+        "traced": [
+            {"site": _hex(site), "targets": [_hex(t) for t in targets]}
+            for site, targets in sorted(ex.traced.items())
+        ],
         "issues": [
             {"addr": _hex(i.addr), "kind": i.kind, "detail": i.detail} for i in sorted_issues(ex)
         ],
@@ -111,19 +121,23 @@ def analysis_to_dict(analysis: Analysis) -> dict:
 def summary_lines(analysis: Analysis) -> list[str]:
     ex, program, coverage = analysis.exploration, analysis.program, analysis.coverage
     veneers = sum(1 for f in program.functions.values() if f.kind == "veneer")
-    counts = Counter(issue.kind for issue in ex.issues)
-    breakdown = ", ".join(f"{kind} {n}" for kind, n in sorted(counts.items())) or "none"
     rows = [
         ("functions", f"{len(program.functions)} ({veneers} veneers)"),
+        ("found by", _breakdown(f.kind for f in program.functions.values())),
         ("blocks", str(len(program.blocks))),
         ("jump tables", str(len(ex.tables))),
         ("code", f"{coverage.code_bytes} bytes"),
         ("literals", f"{coverage.literal_bytes} bytes"),
         ("data", f"{coverage.data_bytes} bytes"),
         ("classified", f"{coverage.classified_percent:.1f}% of {coverage.rom_bytes} bytes"),
-        ("issues", f"{len(ex.issues)} ({breakdown})"),
+        ("issues", f"{len(ex.issues)} ({_breakdown(issue.kind for issue in ex.issues)})"),
     ]
     return [f"{label:<13}{value}" for label, value in rows]
+
+
+def _breakdown(kinds) -> str:
+    counts = Counter(kinds)
+    return ", ".join(f"{kind} {n}" for kind, n in sorted(counts.items())) or "none"
 
 
 def _hex(value: int) -> str:

@@ -8,6 +8,7 @@ from pathlib import Path
 from gbaport import __version__
 from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issues, summary_lines
 from gbaport.analysis.config import GameConfig, default_config_path, load_config
+from gbaport.analysis.traces import default_trace_paths, load_trace
 from gbaport.disasm import disassemble, format_line
 from gbaport.isa.model import Mode
 from gbaport.rom.header import parse_header
@@ -75,16 +76,26 @@ def _add_analyze_command(commands) -> None:
     )
     analyze.add_argument("--out", help="write the full analysis as JSON to this file")
     analyze.add_argument("--issues", type=int, default=20, help="issues to list (default 20)")
+    analyze.add_argument(
+        "--trace",
+        action="append",
+        default=[],
+        help="trace file to import (repeatable; games/<game_code>/traces/*.trace are read too)",
+    )
     analyze.set_defaults(handler=_run_analyze)
 
 
 def _run_analyze(args: argparse.Namespace) -> int:
     rom = RomImage.load(args.rom)
-    config_path = args.config or default_config_path(parse_header(rom).game_code)
+    game_code = parse_header(rom).game_code
+    config_path = args.config or default_config_path(game_code)
     config = load_config(config_path) if config_path else GameConfig()
-    analysis = analyze_rom(rom, config)
+    trace_paths = [*default_trace_paths(game_code), *map(Path, args.trace)]
+    analysis = analyze_rom(rom, config, tuple(load_trace(path) for path in trace_paths))
     if config_path:
         print(f"{'config':<13}{config_path}")
+    for path in trace_paths:
+        print(f"{'trace':<13}{path}")
     for line in summary_lines(analysis):
         print(line)
     for issue in sorted_issues(analysis.exploration)[: args.issues]:

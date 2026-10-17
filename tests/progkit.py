@@ -7,7 +7,7 @@ from ksasm import assemble
 from romkit import build_rom
 
 from gbaport.analysis.config import GameConfig
-from gbaport.analysis.discover import Exploration, explore
+from gbaport.analysis.discover import Exploration, Traced, explore
 from gbaport.analysis.space import CodeSpace
 from gbaport.isa.arm import decode_arm
 from gbaport.isa.model import Instruction, Mode
@@ -215,7 +215,8 @@ def explore_program(
     seeds: list[tuple[int, Mode, str]] | None = None,
     config: GameConfig | None = None,
     size: int = 0x400,
+    traced: Traced | None = None,
 ) -> Exploration:
     space = program_space(source, thumb=thumb, size=size)
     mode = Mode.THUMB if thumb else Mode.ARM
-    return explore(space, seeds or [(CODE_ADDR, mode, "seed")], config)
+    return explore(space, seeds or [(CODE_ADDR, mode, "seed")], config, traced=traced)

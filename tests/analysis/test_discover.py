@@ -195,3 +195,53 @@ def test_lr_constant_outside_code_is_ignored():
     ex = explore_program("mov lr, #0x04000000\nb h\nh: bx lr")
     assert list(ex.entries) == [CODE_ADDR]
     assert ex.issues == []
+
+
+# A call through a veneer whose register comes from memory.
+#   c0 main   c4 bl via_r3   cc via_r3   d0 target (never reached statically)
+UNKNOWN_VENEER = """
+main:
+    push {lr}
+    ldr r3, [r0]
+    bl via_r3
+    pop {r0}
+    bx r0
+via_r3:
+    bx r3
+    mov r8, r8
+target:
+    bx lr
+"""
+
+
+def test_trace_resolves_a_call_through_a_veneer():
+    assert (0x080000C4, "unresolved_call") in kinds(explore_program(UNKNOWN_VENEER, thumb=True))
+    traced = {0x080000C4: ((0x080000D0, Mode.THUMB),)}
+    ex = explore_program(UNKNOWN_VENEER, thumb=True, traced=traced)
+    assert ex.calls[0x080000C4] == (0x080000D0,)
+    assert ex.traced == {0x080000C4: (0x080000D0,)}
+    assert ex.entry_kinds[0x080000D0] == "trace"
+    assert ex.issues == []
+
+
+def test_trace_resolves_an_indirect_jump_to_entries():
+    source = "ldr r0, [r1]\nbx r0\nt1: bx lr\nt2: bx lr"
+    traced = {0x080000C4: ((0x080000CC, Mode.ARM), (0x080000C8, Mode.ARM))}
+    ex = explore_program(source, traced=traced)
+    assert ex.traced == {0x080000C4: (0x080000C8, 0x080000CC)}
+    assert ex.entry_kinds[0x080000C8] == ex.entry_kinds[0x080000CC] == "trace"
+    assert ex.successors[0x080000C4] == ()
+    assert ex.issues == []
+
+
+def test_trace_gives_an_unbounded_switch_its_cases():
+    traced = {0x080000C8: ((0x080000D8, Mode.THUMB), (0x080000DA, Mode.THUMB))}
+    ex = explore_program(UNBOUNDED_TABLE, thumb=True, traced=traced)
+    assert ex.successors[0x080000C8] == (0x080000D8, 0x080000DA)
+    assert 0x080000D8 not in ex.entries
+    assert ex.issues == []
+
+
+def test_targets_of_unreached_traced_sites_become_entries():
+    ex = explore_program("bx lr\nt: bx lr", traced={0x08000300: ((0x080000C4, Mode.ARM),)})
+    assert ex.entry_kinds[0x080000C4] == "trace"

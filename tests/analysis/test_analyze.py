@@ -6,7 +6,9 @@ from progkit import CRT0, program_rom
 
 from gbaport.analysis.analyze import Coverage, analysis_to_dict, analyze_rom, summary_lines
 from gbaport.analysis.config import ConfigError, GameConfig, RamCode
+from gbaport.analysis.traces import Hit, Trace, TraceError
 from gbaport.isa.model import Mode
+from gbaport.rom.info import inspect_rom
 
 
 def test_analyze_crt0_rom():
@@ -20,6 +22,7 @@ def test_analyze_crt0_rom():
 def test_summary_lines():
     lines = summary_lines(analyze_rom(program_rom(CRT0)))
     assert lines[0] == "functions    4 (0 veneers)"
+    assert lines[1] == "found by     call 2, irq 1, seed 1"
     assert "classified   24.8% of 1024 bytes" in lines
     assert lines[-1] == "issues       0 (none)"
 
@@ -82,3 +85,20 @@ def test_data_range_outside_rom_is_rejected():
 def test_data_ranges_count_as_data():
     config = GameConfig(data=((0x08000200, 0x08000300),))
     assert analyze_rom(program_rom("bx lr"), config).coverage.data_bytes == 0xC0 + 0x100
+
+
+def test_traces_must_match_the_rom():
+    with pytest.raises(TraceError, match="sha1"):
+        analyze_rom(program_rom("bx lr"), traces=(Trace("0" * 40),))
+
+
+def test_trace_targets_become_functions():
+    rom = program_rom("ldr r0, [r1]\nbx r0\nt: bx lr")
+    trace = Trace(inspect_rom(rom).sha1, {Hit(0x080000C4, 0x080000C8, Mode.ARM)})
+    analysis = analyze_rom(rom, traces=(trace,))
+    assert analysis.program.functions[0x080000C8].kind == "trace"
+    assert analysis.program.functions[0x080000C0].tail_calls == (0x080000C8,)
+    assert analysis_to_dict(analysis)["traced"] == [
+        {"site": "0x080000c4", "targets": ["0x080000c8"]}
+    ]
+    assert "found by     seed 1, trace 1" in summary_lines(analysis)
