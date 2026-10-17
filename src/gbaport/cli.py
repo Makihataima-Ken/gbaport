@@ -5,7 +5,9 @@ import json
 import sys
 
 from gbaport import __version__
-from gbaport.rom.image import RomImage
+from gbaport.disasm import disassemble, format_line
+from gbaport.isa.model import Mode
+from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
 
 
@@ -16,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"gbaport {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     _add_info_command(commands)
+    _add_disasm_command(commands)
     return parser
 
 
@@ -33,6 +36,29 @@ def _run_info(args: argparse.Namespace) -> int:
     else:
         for key, value in summary.items():
             print(f"{key:<13}{value}")
+    return 0
+
+
+def _int_auto(text: str) -> int:
+    """Parse decimal or 0x-prefixed hex."""
+    return int(text, 0)
+
+
+def _add_disasm_command(commands) -> None:
+    disasm = commands.add_parser("disasm", help="linear-sweep disassembly of a ROM range")
+    disasm.add_argument("rom", help="path to a .gba file")
+    disasm.add_argument(
+        "--start", type=_int_auto, default=ROM_BASE, help="bus address (default 0x08000000)"
+    )
+    disasm.add_argument("--count", type=int, default=32, help="instructions to show (default 32)")
+    disasm.add_argument("--thumb", action="store_true", help="decode as Thumb instead of ARM")
+    disasm.set_defaults(handler=_run_disasm)
+
+
+def _run_disasm(args: argparse.Namespace) -> int:
+    mode = Mode.THUMB if args.thumb else Mode.ARM
+    for ins in disassemble(RomImage.load(args.rom), args.start, args.count, mode):
+        print(format_line(ins))
     return 0
 
 
