@@ -6,9 +6,11 @@ Address comments assume the program starts at CODE_ADDR (0x080000C0).
 from ksasm import assemble
 from romkit import build_rom
 
+from gbaport.analysis.config import GameConfig
+from gbaport.analysis.discover import Exploration, explore
 from gbaport.analysis.space import CodeSpace
 from gbaport.isa.arm import decode_arm
-from gbaport.isa.model import Instruction
+from gbaport.isa.model import Instruction, Mode
 from gbaport.isa.thumb import decode_thumb
 from gbaport.rom.image import RomImage
 
@@ -204,3 +206,16 @@ def decode_program(
         listing.append(ins)
         addr += ins.size
     return listing
+
+
+def explore_program(
+    source: str,
+    *,
+    thumb: bool = False,
+    seeds: list[tuple[int, Mode, str]] | None = None,
+    config: GameConfig | None = None,
+    size: int = 0x400,
+) -> Exploration:
+    space = program_space(source, thumb=thumb, size=size)
+    mode = Mode.THUMB if thumb else Mode.ARM
+    return explore(space, seeds or [(CODE_ADDR, mode, "seed")], config)
