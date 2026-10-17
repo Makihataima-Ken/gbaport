@@ -30,3 +30,7 @@ addopts = "-q"
 [tool.ruff]
 line-length = 100
 target-version = "py313"
+
+[tool.ruff.lint.per-file-ignores]
+# dict(field=value) tables read better than literals in decoder test cases
+"tests/*" = ["C408"]
