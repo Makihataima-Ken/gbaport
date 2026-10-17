@@ -54,6 +54,9 @@ class CodeSpace:
         following = self.read16(addr + 2) if self.contains(addr + 2, 2) else None
         return decode_thumb(self.read16(addr), addr, following)
 
+    def read8(self, addr: int) -> int:
+        return self.rom.data[self._offset(addr, 1)]
+
     def read16(self, addr: int) -> int:
         offset = self._offset(addr, 2)
         return int.from_bytes(self.rom.data[offset:offset + 2], "little")

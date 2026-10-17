@@ -3,6 +3,7 @@ import random
 import pytest
 from progkit import (
     ARM_TABLES,
+    BYTE_TABLE,
     CODE_ADDR,
     CRT0,
     DMA_COPY,
@@ -355,3 +356,103 @@ def test_bios_copies_with_known_operands(swi, control, size):
     ex = explore_program(source, thumb=True)
     expected = [] if size is None else [RamCopy(0x080000C6, 0x08000200, 0x02000000, size)]
     assert ex.copies == expected
+
+
+# Trusted code loads func's address and jumps to it; a wrong guess (cand)
+# branches into the middle, between the load and the jump.
+#   c0 main   c2 mid (bx r0)   c4 lit   c8 func   ca cand   cc its beq mid
+GUESS_INTO_TRUSTED = """
+main:
+    ldr r0, lit
+mid:
+    bx r0
+.align 2
+lit: .word func+1
+func:
+    bx lr
+cand:
+    push {lr}
+    beq mid
+    pop {r0}
+    bx r0
+"""
+
+
+def test_a_wrong_guess_cannot_change_trusted_results():
+    candidates = [(0x080000CA, Mode.THUMB, "pointer")]
+    ex = explore_program(GUESS_INTO_TRUSTED, thumb=True, candidates=candidates)
+    assert ex.jumps == {0x080000C2: 0x080000C8}
+    assert 0x080000CA not in ex.entries
+    assert ex.issues == []
+
+
+def test_a_guess_that_decodes_garbage_is_undone():
+    source = "bx lr\ncand:\n push {lr}\n movs r0, r0\n .hword 0xde00\n"
+    ex = explore_program(source, thumb=True, candidates=[(0x080000C2, Mode.THUMB, "pointer")])
+    assert ex.entries == {0x080000C0: Mode.THUMB}
+    assert sorted(ex.instructions) == [0x080000C0]
+    assert ex.issues == []
+
+
+def test_byte_table_rows_are_one_byte_literals():
+    ex = explore_program(BYTE_TABLE, thumb=True)
+    assert ex.successors[0x080000CA] == (0x080000D0, 0x080000D2, 0x080000D4)
+    assert [ex.literals.get(a) for a in (0x080000CC, 0x080000CD, 0x080000CE)] == [1, 1, 1]
+    assert ex.issues == []
+
+
+def test_traced_targets_of_a_pc_relative_jump_are_cases():
+    source = "ldr r3, [r1]\nadd pc, r3\nc0: bx lr\nc1: bx lr"
+    traced = {0x080000C2: ((0x080000C4, Mode.THUMB), (0x080000C6, Mode.THUMB))}
+    ex = explore_program(source, thumb=True, traced=traced)
+    assert ex.successors[0x080000C2] == (0x080000C4, 0x080000C6)
+    assert 0x080000C4 not in ex.entries
+
+
+# A library routine with a second entry point that trusted code never calls.
+#   c0 main   ca lib   cc alt (inside lib)   d0 cand calls alt
+SECOND_ENTRY = """
+main:
+    push {lr}
+    bl lib
+    pop {r0}
+    bx r0
+lib:
+    movs r0, #0
+alt:
+    adds r0, #1
+    bx lr
+cand:
+    push {lr}
+    bl alt
+    pop {r0}
+    bx r0
+"""
+
+
+def test_a_guess_may_call_into_code_found_before_it():
+    ex = explore_program(SECOND_ENTRY, thumb=True, candidates=[(0x080000D0, Mode.THUMB, "pointer")])
+    assert ex.entry_kinds[0x080000D0] == "pointer"
+    assert ex.entry_kinds[0x080000CC] == "call"
+
+
+def test_a_guess_with_debug_output_is_kept():
+    source = "bx lr\ncand:\n push {lr}\n svc #0xab\n pop {r0}\n bx r0\n"
+    ex = explore_program(source, thumb=True, candidates=[(0x080000C2, Mode.THUMB, "pointer")])
+    assert ex.entry_kinds[0x080000C2] == "pointer"
+
+
+def test_a_guess_may_tail_branch_into_code_found_before_it():
+    source = SECOND_ENTRY.replace("    bl alt\n    pop {r0}\n    bx r0\n", "    pop {r0}\n    b alt\n")
+    ex = explore_program(source, thumb=True, candidates=[(0x080000D0, Mode.THUMB, "pointer")])
+    assert ex.entry_kinds[0x080000D0] == "pointer"
+
+
+def test_a_guess_may_call_library_code_that_shares_tails():
+    source = SECOND_ENTRY.replace(
+        "    bl alt\n    pop {r0}\n    bx r0\n",
+        "    bl lib2\n    pop {r0}\n    bx r0\nlib2:\n    cmp r0, #0\n    beq alt\n    bx lr\n",
+    )
+    ex = explore_program(source, thumb=True, candidates=[(0x080000D0, Mode.THUMB, "pointer")])
+    assert ex.entry_kinds[0x080000D0] == "pointer"
+    assert ex.entry_kinds[0x080000DA] == "call"

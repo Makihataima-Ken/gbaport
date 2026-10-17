@@ -7,6 +7,10 @@ single instruction and records where it went. A call through a veneer is
 recorded at the ``bl`` that called the veneer (found from LR), so it resolves
 per call site. While the game runs, new targets are fed back into the
 analysis and the breakpoints follow the code that becomes reachable.
+
+A step is recorded only when it plainly finished the site: the site's
+condition held, the server answered with a finished step, the CPU mode did
+not change (no interrupt was taken) and the game did not land in the BIOS.
 """
 
 import time
@@ -15,12 +19,15 @@ from dataclasses import dataclass
 
 from gbaport.analysis.discover import Exploration
 from gbaport.analysis.traces import Hit, Trace
-from gbaport.isa.model import Mode, Op
-from gbaport.tracing.gdb import GdbClient
+from gbaport.isa.model import Cond, Mode, Op
+from gbaport.rom.image import ROM_BASE, RomImage
+from gbaport.tracing.gdb import GdbClient, GdbError, Registers
 
 MAX_BREAKPOINTS = 256  # mGBA checks every instruction against them; keep the game fast
 STEP_TIMEOUT = 1.0
 POLL = 0.25  # seconds between checks for the end of the session while the game runs
+GAME_MEMORY = 0x02000000  # below this is the BIOS, where no traced target can be
+ROM_SAMPLES = 4  # chunks compared besides the header to recognise the loaded ROM
 _SITE_ISSUES = ("unresolved_jump", "unbounded_table", "unresolved_call")
 
 
@@ -50,6 +57,39 @@ def breakpoint_sites(ex: Exploration) -> list[Site]:
     return sites[:MAX_BREAKPOINTS]
 
 
+def check_loaded_rom(client: GdbClient, rom: RomImage) -> None:
+    """Raise ``GdbError`` unless the emulator runs ``rom``: header and samples must match."""
+    size = len(rom.data)
+    offsets = [0] + [size * k // (ROM_SAMPLES + 1) & ~3 for k in range(1, ROM_SAMPLES + 1)]
+    for offset in offsets:
+        length = min(0xC0, size - offset)
+        if client.read_memory(ROM_BASE + offset, length) != rom.data[offset : offset + length]:
+            raise GdbError(
+                f"mGBA has a different ROM loaded (it differs at {ROM_BASE + offset:#010x}); "
+                "open the same file in mGBA"
+            )
+
+
+def condition_passed(cond: Cond, cpsr: int) -> bool:
+    n, z, c, v = (bool(cpsr >> bit & 1) for bit in (31, 30, 29, 28))
+    return {
+        Cond.EQ: z,
+        Cond.NE: not z,
+        Cond.CS: c,
+        Cond.CC: not c,
+        Cond.MI: n,
+        Cond.PL: not n,
+        Cond.VS: v,
+        Cond.VC: not v,
+        Cond.HI: c and not z,
+        Cond.LS: not c or z,
+        Cond.GE: n == v,
+        Cond.LT: n != v,
+        Cond.GT: not z and n == v,
+        Cond.LE: z or n != v,
+    }.get(cond, True)
+
+
 class TraceSession:
     def __init__(
         self,
@@ -69,25 +109,27 @@ class TraceSession:
         self.report = report
         self.reanalyze_every = reanalyze_every
         self.clock = clock
-        self.sites: dict[int, Site] = {}
+        self.sites: dict[int, Site] = {}  # breakpoints that are (or may be) set in the emulator
         self.ex = Exploration()
         self.new_hits = 0
         self.last_refresh = 0.0
 
     def run(self, seconds: float | None = None) -> None:
-        """Trace until ``seconds`` pass, the game exits, or Ctrl+C; the trace is always saved."""
+        """Trace until ``seconds`` pass, the game exits, or Ctrl+C.
+
+        The trace is always saved. Unless the game exited, the breakpoints
+        are then cleared and the game left running, as far as the connection
+        still allows.
+        """
         deadline = None if seconds is None else self.clock() + seconds
-        running = exited = False
+        exited = False
         try:
             self.client.handshake()
-            self.client.interrupt()  # mGBA may be running already; stop it to set breakpoints
-            self.client.wait_stop(STEP_TIMEOUT)
+            self.client.halt()  # breakpoints are set while the game is stopped
             self._refresh()
-            while True:
+            while not self._expired(deadline):
                 self.client.cont()
-                running = True
                 stop = self._wait(deadline)
-                running = False
                 if stop is None or stop.exited:
                     exited = stop is not None
                     break
@@ -95,23 +137,23 @@ class TraceSession:
                 if self.new_hits and self.clock() - self.last_refresh >= self.reanalyze_every:
                     self._refresh()
         except KeyboardInterrupt:
-            if running:
-                self.client.interrupt()
-                self.client.wait_stop(STEP_TIMEOUT)
+            pass
         finally:
             self.save(self.trace)
-        if not exited:
-            self._release()
+            if not exited:
+                self._release()
+
+    def _expired(self, deadline: float | None) -> bool:
+        return deadline is not None and self.clock() >= deadline
 
     def _wait(self, deadline: float | None):
-        """The next stop, or None once the deadline passes (the game is then stopped)."""
+        """The next stop, or None once the deadline passes (the game is then halted)."""
         while True:
             stop = self.client.wait_stop(POLL)
             if stop is not None:
                 return stop
-            if deadline is not None and self.clock() >= deadline:
-                self.client.interrupt()
-                self.client.wait_stop(STEP_TIMEOUT)
+            if self._expired(deadline):
+                self.client.halt()
                 return None
 
     def _handle_stop(self) -> None:
@@ -121,15 +163,19 @@ class TraceSession:
             if site is None:
                 return
             origin = self._call_site(site, regs.lr)
-            if self.client.step(STEP_TIMEOUT) is None:  # stepped into a BIOS call
-                self.client.interrupt()
-                self.client.wait_stop(STEP_TIMEOUT)
-            regs = self.client.registers()
-            mode = Mode.THUMB if regs.thumb else Mode.ARM
-            if self.trace.add(Hit(origin, regs.pc, mode)):
-                self.new_hits += 1
-            if regs.pc == site.addr:
-                return
+            ins = self.ex.instructions.get(site.addr)
+            taken = condition_passed(ins.cond if ins is not None else Cond.AL, regs.cpsr)
+            stop = self.client.step(STEP_TIMEOUT)
+            if stop is None:  # mGBA 0.11 runs on after a step into the BIOS
+                self.client.halt()
+            after = self.client.registers()
+            if taken and stop is not None and stop.step and _plausible(regs, after, site):
+                mode = Mode.THUMB if after.thumb else Mode.ARM
+                if self.trace.add(Hit(origin, after.pc, mode)):
+                    self.new_hits += 1
+            if stop is not None and stop.step and after.pc == regs.pc:
+                return  # a site that jumps to itself
+            regs = after  # after a breakpoint stop or a timeout, pc may be another site
 
     def _call_site(self, site: Site, lr: int) -> int:
         """The ``bl`` that called a veneer, or the site itself."""
@@ -146,17 +192,37 @@ class TraceSession:
         wanted = {site.addr: site for site in breakpoint_sites(self.ex)}
         for addr in sorted(self.sites.keys() - wanted.keys()):
             self.client.clear_breakpoint(addr, self.sites[addr].size)
+            del self.sites[addr]
         for addr in sorted(wanted.keys() - self.sites.keys()):
+            self.sites[addr] = wanted[addr]  # first, so a release clears it even if cut short
             self.client.set_breakpoint(addr, wanted[addr].size)
-        self.sites = wanted
         self.report(f"{len(self.trace.hits)} hits (+{self.new_hits}), {len(wanted)} breakpoints")
         self.new_hits = 0
         self.last_refresh = self.clock()
         self.save(self.trace)
 
     def _release(self) -> None:
-        """Clear the breakpoints and let the game run on."""
+        """Best effort: resynchronise, clear the breakpoints and let the game run on."""
+        try:
+            self.client.halt()
+        except GdbError:
+            return  # the connection is gone
         for addr, site in sorted(self.sites.items()):
-            self.client.clear_breakpoint(addr, site.size)
+            try:
+                self.client.clear_breakpoint(addr, site.size)
+            except GdbError:
+                pass  # never set (cut short), or the connection just went
         self.sites = {}
-        self.client.cont()
+        try:
+            self.client.cont()
+        except GdbError:
+            pass
+
+
+def _plausible(before: Registers, after: Registers, site: Site) -> bool:
+    """The step went somewhere a game can jump: no exception entry, no BIOS, not stuck."""
+    return (
+        after.pc >= GAME_MEMORY
+        and after.cpsr & 0x1F == before.cpsr & 0x1F
+        and after.pc != site.addr
+    )

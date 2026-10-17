@@ -264,3 +264,22 @@ target:
 second:
     bx lr
 """
+
+
+# GCC's Thumb switch through a byte table of halfword offsets from the `add pc`.
+#   ca dispatch (reads pc as ce)   cc table 1, 2, 3   d0 c0   d2 c1   d4 c2   d6 dflt
+BYTE_TABLE = """
+    cmp r0, #2
+    bhi dflt
+    adr r3, tbl
+    ldrb r3, [r3, r0]
+    lsls r3, r3, #1
+    add pc, r3
+.align 2
+tbl: .byte 1, 2, 3
+.align 1
+c0: bx lr
+c1: bx lr
+c2: bx lr
+dflt: bx lr
+"""

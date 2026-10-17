@@ -94,3 +94,11 @@ def test_non_utf8_file_names_the_file(tmp_path):
     path.write_bytes(b"\xff\xfe")
     with pytest.raises(TraceError, match="bad.trace"):
         load_trace(path)
+
+
+def test_load_trace_checks_the_rom(tmp_path):
+    path = tmp_path / "run.trace"
+    save_trace(Trace(SHA1), path)
+    assert load_trace(path, SHA1).sha1 == SHA1
+    with pytest.raises(TraceError, match=r"run\.trace: recorded on ROM sha1 8dd4"):
+        load_trace(path, "0" * 40)

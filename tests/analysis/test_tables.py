@@ -1,4 +1,11 @@
-from progkit import ARM_TABLES, THUMB_TABLE, UNBOUNDED_TABLE, decode_program, program_space
+from progkit import (
+    ARM_TABLES,
+    BYTE_TABLE,
+    THUMB_TABLE,
+    UNBOUNDED_TABLE,
+    decode_program,
+    program_space,
+)
 
 from gbaport.analysis.config import JumpTableOverride
 from gbaport.analysis.effects import RegState
@@ -118,3 +125,20 @@ def test_compare_without_an_unsigned_guard_is_no_bound():
     match = find_jump_table(dispatch, history, space, {})
     assert match.table is None
     assert "has no bound" in match.problem
+
+
+def test_thumb_byte_table_switch():
+    space = program_space(BYTE_TABLE, thumb=True)
+    dispatch, history = dispatch_after(space, 5, thumb=True)
+    targets = (0x080000D0, 0x080000D2, 0x080000D4)
+    assert find_jump_table(dispatch, history, space, {}) == TableMatch(
+        JumpTable(0x080000CA, 0x080000CC, Mode.THUMB, targets, data=True, entry_size=1)
+    )
+
+
+def test_thumb_signed_byte_table_switch():
+    source = BYTE_TABLE.replace("ldrb", "ldrsb").replace(".byte 1, 2, 3", ".byte 1, 2, 0xfe")
+    space = program_space(source, thumb=True)
+    dispatch, history = dispatch_after(space, 5, thumb=True)
+    match = find_jump_table(dispatch, history, space, {})
+    assert match.table.targets == (0x080000D0, 0x080000D2, 0x080000CA)

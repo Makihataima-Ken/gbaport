@@ -68,4 +68,5 @@ def test_trace_of_another_rom_is_an_error(tmp_path, capsys, monkeypatch):
     (tmp_path / "other.trace").write_text("gbaport-trace/1 " + "0" * 40 + "\n")
     args = ["analyze", str(write(tmp_path, program_rom("bx lr"))), "--trace", "other.trace"]
     assert main(args) == 1
-    assert "sha1" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert "sha1" in err and "other.trace" in err

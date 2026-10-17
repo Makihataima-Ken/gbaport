@@ -1,10 +1,23 @@
 """A scripted stand-in for mGBA's GDB server, used as a transport in tests.
 
 The fake "runs" a fixed list of CPU states, each the address of the next
-instruction with its mode and LR. ``c`` moves to the next state whose address
-has a breakpoint, ``s`` moves one state, and running off the end exits the
-game (or, with ``endless``, keeps it running until interrupted). Replies
-imitate mGBA, including its ``+`` acks, ``S05k`` stops and ``E07`` errors.
+instruction with its mode, flags and LR. ``c`` moves to the next state whose
+address has a breakpoint, ``s`` moves one state, and running off the end exits
+the game (or, with ``endless``, keeps it running until interrupted). Replies
+imitate mGBA's ``src/debugger/gdb-stub.c``:
+
+- every packet is acknowledged with ``+``;
+- every 0x03 byte is answered with ``S02``, even when the game is already halted;
+- a breakpoint stop is ``T05hwbreak:;`` once the client advertised ``hwbreak+``
+  (``S05k`` otherwise), and a finished step is ``S05``;
+- with ``step_skips_bios``, a step into the BIOS (below 0x02000000) silently
+  runs on to the next breakpoint, as mGBA 0.11 does;
+- ``m`` reads the ``rom`` bytes mapped at 0x08000000; unknown packets get ``E07``.
+
+Two hooks raise ``KeyboardInterrupt`` the way Ctrl+C would: ``raise_after``
+(a packet prefix, once, after the packet was handled and answered) and
+``interrupt_in_flight`` (once, when a stop happens while the client waits for
+it, leaving that stop reply queued as on a real socket).
 """
 
 import socket
@@ -13,23 +26,40 @@ from dataclasses import dataclass
 
 from gbaport.tracing.gdb import GdbError, packet
 
+USER_MODE = 0x1F  # system mode, where games run
+
 
 @dataclass(frozen=True)
 class State:
     pc: int
     thumb: bool = True
     lr: int = 0
+    mode: int = USER_MODE
+    flags: int = 0  # NZCV in bits 31-28
 
 
 class FakeGdbServer:
     def __init__(
-        self, states: list[State], *, endless: bool = False, lose_at: int | None = None
+        self,
+        states: list[State],
+        *,
+        endless: bool = False,
+        lose_at: int | None = None,
+        rom: bytes | None = None,
+        step_skips_bios: bool = False,
+        raise_after: str | None = None,
+        interrupt_in_flight: bool = False,
     ) -> None:
         self.states = states
         self.index = 0
         self.endless = endless
         self.lose_at = lose_at  # index whose arrival drops the connection
+        self.rom = rom
+        self.step_skips_bios = step_skips_bios
+        self.raise_after = raise_after
+        self.interrupt_in_flight = interrupt_in_flight
         self.breakpoints: dict[int, int] = {}
+        self.hwbreak = False
         self.running = False
         self.lost = False
         self.pending = bytearray()
@@ -45,19 +75,24 @@ class FakeGdbServer:
                 del self.pending[:1]
             elif first == 0x03:
                 del self.pending[:1]
-                if self.running:
-                    self.running = False
-                    self._reply("S02")
+                self.running = False
+                self._reply("S02")
             else:
                 end = self.pending.index(b"#")
                 payload = self.pending[1:end].decode()
                 del self.pending[: end + 3]
                 self.out += b"+"
                 self._handle(payload)
+                if self.raise_after is not None and payload.startswith(self.raise_after):
+                    self.raise_after = None
+                    raise KeyboardInterrupt
 
     def recv(self, timeout: float) -> bytes:
         if self.running:
             self._run()
+            if self.interrupt_in_flight and not self.running:
+                self.interrupt_in_flight = False
+                raise KeyboardInterrupt
         if self.lost:
             raise GdbError("connection lost")
         data = bytes(self.out)
@@ -72,23 +107,37 @@ class FakeGdbServer:
 
     def _handle(self, payload: str) -> None:
         if payload.startswith("qSupported"):
+            self.hwbreak = "hwbreak+" in payload
             self._reply("PacketSize=1000;swbreak+;hwbreak+")
         elif payload == "g":
             state = self.states[min(self.index, len(self.states) - 1)]
-            words = [0] * 14 + [state.lr, state.pc, 0x3F if state.thumb else 0x1F]
+            cpsr = state.flags | state.mode | (0x20 if state.thumb else 0)
+            words = [0] * 14 + [state.lr, state.pc, cpsr]
             self._reply("".join(word.to_bytes(4, "little").hex() for word in words))
+        elif payload.startswith("m"):
+            addr, length = (int(text, 16) for text in payload[1:].split(","))
+            offset = addr - 0x08000000
+            if self.rom is None or offset < 0 or offset + length > len(self.rom):
+                self._reply("E01")
+            else:
+                self._reply(self.rom[offset : offset + length].hex())
         elif payload[:3] in ("Z0,", "z0,"):
             _, addr, size = payload.split(",")
             if payload[0] == "Z":
                 self.breakpoints[int(addr, 16)] = int(size)
             else:
-                del self.breakpoints[int(addr, 16)]
+                self.breakpoints.pop(int(addr, 16), None)
             self._reply("OK")
         elif payload == "c":
             self.running = True
         elif payload == "s":
             self.index += 1
-            self._reply("S05" if self.index < len(self.states) else "W00")
+            if self.index >= len(self.states):
+                self._reply("W00")
+            elif self.step_skips_bios and self.states[self.index].pc < 0x02000000:
+                self.running = True  # no reply: it comes from the next breakpoint
+            else:
+                self._reply("S05")
         else:
             self._reply("E07")
 
@@ -105,7 +154,7 @@ class FakeGdbServer:
             self.lost = True
         elif self.index < len(self.states):
             self.running = False
-            self._reply("S05k")
+            self._reply("T05hwbreak:;" if self.hwbreak else "S05k")
         elif not self.endless:
             self.running = False
             self._reply("W00")

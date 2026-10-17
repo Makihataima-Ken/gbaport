@@ -14,8 +14,8 @@ from gbaport.isa.model import Mode
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
-from gbaport.tracing.gdb import GdbClient, SocketTransport
-from gbaport.tracing.session import TraceSession
+from gbaport.tracing.gdb import GdbClient, GdbError, SocketTransport
+from gbaport.tracing.session import TraceSession, check_loaded_rom
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -94,7 +94,9 @@ def _run_analyze(args: argparse.Namespace) -> int:
     config_path = args.config or default_config_path(game_code)
     config = load_config(config_path) if config_path else GameConfig()
     trace_paths = [*default_trace_paths(game_code), *map(Path, args.trace)]
-    analysis = analyze_rom(rom, config, tuple(load_trace(path) for path in trace_paths))
+    sha1 = inspect_rom(rom).sha1
+    traces = tuple(load_trace(path, sha1) for path in trace_paths)
+    analysis = analyze_rom(rom, config, traces)
     if config_path:
         print(f"{'config':<13}{config_path}")
     for path in trace_paths:
@@ -145,14 +147,21 @@ def _run_trace(args: argparse.Namespace) -> int:
     config_path = args.config or default_config_path(game_code)
     config = load_config(config_path) if config_path else GameConfig()
     out = Path(args.out) if args.out else Path("games") / game_code / "traces" / "mgba.trace"
-    recorded = load_trace(out) if out.exists() else Trace(inspect_rom(rom).sha1)
+    sha1 = inspect_rom(rom).sha1
+    recorded = load_trace(out, sha1) if out.exists() else Trace(sha1)
     others = [*default_trace_paths(game_code), *map(Path, args.trace)]
-    fixed = tuple(load_trace(path) for path in others if path.resolve() != out.resolve())
+    fixed = tuple(load_trace(path, sha1) for path in others if path.resolve() != out.resolve())
 
     def analyze(trace: Trace):
         return analyze_rom(rom, config, (*fixed, trace)).exploration
 
     client = GdbClient(SocketTransport.connect(args.host, args.port))
+    try:
+        client.handshake()
+        check_loaded_rom(client, rom)
+    except GdbError:
+        client.close()
+        raise
     print(f"connected to {args.host}:{args.port}; play the game, press Ctrl+C to stop")
     session = TraceSession(
         client,

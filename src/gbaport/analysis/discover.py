@@ -39,6 +39,14 @@ DMA_BASE = 0x040000B0  # DMA0SAD; each of the 4 channels is SAD, DAD, CNT_L, CNT
 DMA_END = DMA_BASE + 4 * 12
 _DMA_NOT_A_PLAIN_COPY = 0x31E0  # CNT_H: start timing, or a source/destination that is not +1
 CPU_SET, CPU_FAST_SET = 0x0B, 0x0C
+LAST_BIOS_CALL = 0x2A  # the BIOS has SWIs 0x00-0x2A
+SEMIHOSTING = 0xAB  # Thumb debug-output SWI that devkits leave in shipped games
+_SUSPECT_ISSUES = frozenset({"undefined", "overlap", "enters_data", "mode_conflict", "misaligned"})
+# Exploration fields a guessed entry's walk adds to (only ever appended, in order).
+_JOURNALED = (
+    "instructions", "successors", "entries", "entry_kinds", "calls", "jumps",
+    "literals", "tables", "issues", "traced", "copies", "outside",
+)
 HISTORY_LIMIT = 16
 _LITERAL_SIZES = {Op.LDR: 4, Op.LDRH: 2, Op.LDRSH: 2, Op.LDRB: 1, Op.LDRSB: 1}
 _LEAVES = frozenset({FlowKind.BRANCH, FlowKind.JUMP, FlowKind.INDIRECT, FlowKind.RETURN})
@@ -126,7 +134,11 @@ class _Explorer:
         self.leaders = leaders  # join points: walks reaching them forget their constants
         self.targets: set[int] = set()  # every branch target and entry found in this pass
         self.ex = Exploration()
-        self.work: deque[tuple[int, Mode]] = deque()
+        self.work: deque[tuple[int, Mode, bool]] = deque()  # (addr, mode, guess's own code)
+        self.own = False  # the walk under way is the guessed function's own code
+        self.trial: set[int] | None = None  # instructions decoded by the guess being tried
+        self.trial_targets: list[int] = []  # targets the guess being tried added
+        self.suspect = False  # the guess being tried did something real code does not
 
     def drain(self) -> None:
         while self.work:
@@ -150,7 +162,18 @@ class _Explorer:
             self.drain()
 
     def drain_candidates(self, candidates: list[tuple[int, Mode, str]]) -> None:
-        """Walk each guessed entry on its own, unless it lands in code or data already found."""
+        """Try each guessed entry on its own, and undo it if anything about it looks wrong.
+
+        A guess is skipped when it lands in code or data already found. Its
+        walk is undone when it decodes something no compiler emits (undefined
+        or overlapping instructions, unpaired BL halves, SWIs the BIOS lacks),
+        walks into data, or takes a conditional branch (or falls) into the
+        middle of code found before it, so a wrong guess can neither leave
+        garbage behind nor add join points inside code found from trusted
+        seeds. Calls and unconditional ``b`` into such code are allowed:
+        library routines have several entry points, and long-branch veneers
+        reach them with a plain ``b``.
+        """
         for addr, mode, kind in candidates:
             addr = self.space.canonical(addr)
             covering = self.ex.instructions.get(addr - 2)
@@ -160,13 +183,52 @@ class _Explorer:
                 or self._is_data(addr)
             ):
                 continue
-            self.add_entry(addr, mode, kind, origin=addr)
+            mark = {name: len(getattr(self.ex, name)) for name in _JOURNALED}
+            self.trial, self.trial_targets, self.suspect = set(), [], False
+            self.add_entry(addr, mode, kind, origin=addr, own=True)
             self.drain()
+            issues = self.ex.issues[mark["issues"] :]
+            if self.suspect or any(issue.kind in _SUSPECT_ISSUES for issue in issues):
+                self._undo(mark)
+            self.trial = None
+
+    def _undo(self, mark: dict[str, int]) -> None:
+        """Drop everything recorded since ``mark``."""
+        for name, size in mark.items():
+            recorded = getattr(self.ex, name)
+            if isinstance(recorded, list):
+                del recorded[size:]
+            else:
+                for key in list(recorded)[size:]:
+                    del recorded[key]
+        self.targets.difference_update(self.trial_targets)
+
+    def _check_reach(self, addr: int) -> None:
+        """A guessed function must not branch or fall into the middle of code found before it.
+
+        Only its own code is held to this: the library routines it calls may
+        share tails with routines found earlier.
+        """
+        if (
+            self.trial is not None
+            and self.own
+            and addr in self.ex.instructions
+            and addr not in self.trial
+            and addr not in self.ex.entries
+        ):
+            self.suspect = True
+
+    def _add_target(self, addr: int) -> None:
+        if self.trial is not None and addr not in self.targets:
+            self.trial_targets.append(addr)
+        self.targets.add(addr)
 
     def issue(self, addr: int, kind: str, detail: str) -> None:
         self.ex.issues.append(Issue(addr, kind, detail))
 
-    def add_entry(self, addr: int, mode: Mode, kind: str, origin: int) -> int | None:
+    def add_entry(
+        self, addr: int, mode: Mode, kind: str, origin: int, own: bool = False
+    ) -> int | None:
         addr = self.space.canonical(addr)
         if not self.space.contains(addr, 2):
             self.ex.outside.setdefault(addr, mode)
@@ -177,24 +239,28 @@ class _Explorer:
                 "add a [[ram_code]] entry if the game copies code there",
             )
             return None
-        self.targets.add(addr)
+        self._add_target(addr)
         if addr not in self.ex.entries:
             self.ex.entries[addr] = mode
             self.ex.entry_kinds[addr] = kind
-            self.work.append((addr, mode))
+            self.work.append((addr, mode, own))
         return addr
 
-    def add_branch(self, addr: int, mode: Mode, origin: int) -> int | None:
+    def add_branch(self, addr: int, mode: Mode, origin: int, tail: bool = False) -> int | None:
+        """Queue a branch target; ``tail`` marks an unconditional ``b`` (possibly a tail call)."""
         addr = self.space.canonical(addr)
         if not self.space.contains(addr, 2):
             self.ex.outside.setdefault(addr, mode)
             self.issue(origin, "outside_code", f"branch target {addr:#010x} is outside the ROM")
             return None
-        self.targets.add(addr)
-        self.work.append((addr, mode))
+        if not tail:
+            self._check_reach(addr)
+        self._add_target(addr)
+        self.work.append((addr, mode, self.own))
         return addr
 
-    def walk(self, addr: int, mode: Mode) -> None:
+    def walk(self, addr: int, mode: Mode, own: bool = False) -> None:
+        self.own = own
         start = addr
         state = RegState()
         history: list[Step] = []
@@ -204,6 +270,8 @@ class _Explorer:
         while True:
             if addr != start and addr in self.leaders:
                 state, history, prev, lr_set, dma = RegState(), [], None, False, {}
+            if addr != start:
+                self._check_reach(addr)  # a guess falling through into earlier code
             ins = self._take(addr, mode)
             if ins is None:
                 return
@@ -253,6 +321,9 @@ class _Explorer:
         if self._overlaps(ins):
             self.issue(addr, "overlap", "instruction overlaps one decoded earlier")
             return None
+        if self.trial is not None:
+            self.trial.add(addr)
+            self.suspect = self.suspect or _unlikely(ins)
         self.ex.instructions[addr] = ins
         return ins
 
@@ -358,7 +429,7 @@ class _Explorer:
             self._call(ins, flow, state)
             return after, True
         if kind is FlowKind.BRANCH:
-            target = self.add_branch(*flow.target, origin=ins.addr)
+            target = self.add_branch(*flow.target, origin=ins.addr, tail=not flow.falls_through)
             here = () if target is None else (target,)
         elif kind is FlowKind.JUMP:
             entry = self.add_entry(*flow.target, "jump", origin=ins.addr)
@@ -434,7 +505,9 @@ class _Explorer:
         match = find_jump_table(ins, history, self.space, self.overrides)
         hits = self.traced.get(ins.addr, ())
         if hits and (match is None or match.table is None):
-            return self._traced_jump(ins, hits, switch=match is not None)
+            # A pc-relative computed jump (add pc, ...) can only reach its own function.
+            relative = ins.op is Op.ADD and ins.rd == PC and ins.rn == PC
+            return self._traced_jump(ins, hits, switch=match is not None or relative)
         if match is None:
             if self.ex.entry_kinds.get(ins.addr) != "veneer":
                 self.issue(
@@ -451,7 +524,7 @@ class _Explorer:
         self.ex.tables.append(table)
         if table.data:
             for i in range(len(table.targets)):
-                self.ex.literals.setdefault(table.table + 4 * i, 4)
+                self.ex.literals.setdefault(table.table + table.entry_size * i, table.entry_size)
         targets = (self.add_branch(t, table.mode, origin=ins.addr) for t in table.targets)
         return tuple(t for t in targets if t is not None)
 
@@ -471,6 +544,16 @@ class _Explorer:
         targets = tuple(sorted({t for t in found if t is not None}))
         self.ex.traced[ins.addr] = targets
         return targets if switch else ()
+
+
+def _unlikely(ins: Instruction) -> bool:
+    """Decodes, but no compiler emits it: an unpaired BL half or a SWI the BIOS lacks."""
+    if ins.op in (Op.BL_HI, Op.BL_LO):
+        return True
+    if ins.op is Op.SWI:
+        number = ins.imm >> 16 if ins.mode is Mode.ARM else ins.imm
+        return number > LAST_BIOS_CALL and number != SEMIHOSTING
+    return False
 
 
 def _stores(ins: Instruction, state: RegState) -> list[tuple[int, int | None, int]]:

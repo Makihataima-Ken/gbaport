@@ -78,8 +78,10 @@ def test_short_register_reply_is_an_error():
 @pytest.mark.parametrize(
     "payload,stop",
     [
-        ("S05k", Stop(5)),  # what mGBA sends for a breakpoint without swbreak support
-        ("T05swbreak:;", Stop(5)),
+        ("S05", Stop(5)),  # a finished step
+        ("S05k", Stop(5, breakpoint=True)),  # mGBA's breakpoint stop without hwbreak+
+        ("T05hwbreak:;", Stop(5, breakpoint=True)),
+        ("T05swbreak:;", Stop(5, breakpoint=True)),
         ("S02", Stop(2)),
         ("W00", Stop(0, exited=True)),
         ("X09", Stop(9, exited=True)),
@@ -132,3 +134,30 @@ def test_connect_failure_says_how_to_start_the_server():
     probe.close()
     with pytest.raises(GdbError, match="Start GDB server"):
         SocketTransport.connect("127.0.0.1", port, timeout=0.5)
+
+
+def test_only_a_plain_s05_is_a_finished_step():
+    assert Stop(5).step
+    assert not Stop(5, breakpoint=True).step
+    assert not Stop(2).step
+    assert not Stop(0, exited=True).step
+
+
+def test_halt_drops_stale_replies_up_to_the_s02():
+    wire = Wire(reply("T05hwbreak:;") + reply("0102") + reply("S02"), reply("OK"))
+    client = GdbClient(wire)
+    client.halt()
+    assert wire.sent.startswith(bytes([0x03]))
+    assert client.request("qX") == "OK"
+
+
+def test_halt_gives_up_quietly_when_nothing_answers():
+    GdbClient(Wire()).halt(timeout=0.01)
+
+
+def test_read_memory():
+    wire = Wire(reply("0102ff"))
+    assert GdbClient(wire).read_memory(0x08000000, 3) == bytes([1, 2, 0xFF])
+    assert wire.sent.startswith(packet("m8000000,3"))
+    with pytest.raises(GdbError, match="cannot read 3 bytes at 0x08000000"):
+        GdbClient(Wire(reply("E01"))).read_memory(0x08000000, 3)

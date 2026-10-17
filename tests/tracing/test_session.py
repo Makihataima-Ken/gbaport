@@ -9,7 +9,7 @@ from gbaport.analysis.traces import Hit, Trace
 from gbaport.isa.model import Mode
 from gbaport.rom.info import inspect_rom
 from gbaport.tracing.gdb import GdbClient, GdbError
-from gbaport.tracing.session import Site, TraceSession, breakpoint_sites
+from gbaport.tracing.session import Site, TraceSession, breakpoint_sites, check_loaded_rom
 
 ROM = program_rom(SESSION_PROGRAM)
 SHA1 = inspect_rom(ROM).sha1
@@ -86,3 +86,92 @@ def test_progress_is_reported():
     traced.run()
     assert lines[0] == "0 hits (+0), 1 breakpoints"
     assert lines[-1].endswith("2 breakpoints")
+
+
+def test_conditional_site_that_falls_through_records_nothing():
+    source = "push {lr}\nldr r1, [r0]\ncmp r0, #0\nbxne r1\npop {lr}\nbx lr"
+    rom = program_rom(source)
+    sha1 = inspect_rom(rom).sha1
+    run = [
+        State(0x080000C0, thumb=False),
+        State(0x080000CC, thumb=False, flags=0x40000000),  # Z set: bxne does not jump
+        State(0x080000D0, thumb=False),
+    ]
+    traced = TraceSession(
+        GdbClient(FakeGdbServer(run)),
+        lambda trace: analyze_rom(rom, traces=(trace,)).exploration,
+        Trace(sha1),
+        reanalyze_every=0,
+    )
+    traced.run()
+    assert traced.trace.hits == set()
+
+
+# An IRQ is taken on the step: mGBA 0.10 runs the BIOS vector instead of the site.
+IRQ_ON_STEP = [
+    State(0x080000C0, thumb=False),
+    State(0x080000D4, thumb=False, lr=0x080000CC),
+    State(0x00000128, thumb=False, mode=0x12),
+    State(0x080000D4, thumb=False, lr=0x080000CC),
+    State(0x080000D8, thumb=False, lr=0x080000CC),
+]
+
+
+def test_irq_taken_during_a_step_records_nothing():
+    traced, _ = session(FakeGdbServer(IRQ_ON_STEP))
+    traced.run()
+    assert traced.trace.hits == {Hit(0x080000C8, 0x080000D8, Mode.ARM)}
+
+
+def test_step_that_runs_on_to_another_breakpoint_records_nothing():
+    traced, _ = session(FakeGdbServer(IRQ_ON_STEP, step_skips_bios=True))
+    traced.run()
+    assert traced.trace.hits == {Hit(0x080000C8, 0x080000D8, Mode.ARM)}
+
+
+def test_step_that_never_comes_back_records_nothing():
+    run = IRQ_ON_STEP[:3]
+    ticks = itertools.count()
+    server = FakeGdbServer(run, step_skips_bios=True, endless=True)
+    traced, _ = session(server, clock=lambda: float(next(ticks)))
+    traced.run(seconds=5)
+    assert traced.trace.hits == set()
+
+
+def test_time_limit_holds_while_breakpoints_keep_firing():
+    run = [State(0x080000C0, thumb=False)] + [
+        State(0x080000D4, thumb=False, lr=0x080000CC),
+        State(0x080000D8, thumb=False, lr=0x080000CC),
+    ] * 200
+    server = FakeGdbServer(run)
+    ticks = itertools.count()
+    traced, _ = session(server, clock=lambda: float(next(ticks)), reanalyze_every=1000)
+    traced.run(seconds=10)
+    assert server.index < 40
+    assert server.breakpoints == {}
+    assert server.running
+
+
+def test_ctrl_c_with_a_stop_in_flight_releases_the_game():
+    server = FakeGdbServer(SESSION_RUN, interrupt_in_flight=True)
+    traced, saved = session(server)
+    traced.run()
+    assert server.breakpoints == {}
+    assert server.running
+    assert saved
+
+
+def test_ctrl_c_while_setting_breakpoints_releases_them():
+    known = Trace(SHA1, {Hit(0x080000C8, 0x080000D8, Mode.ARM)})
+    server = FakeGdbServer(SESSION_RUN, raise_after="Z0,80000e4")
+    traced, _ = session(server, known)
+    traced.run()
+    assert server.breakpoints == {}
+    assert server.running
+
+
+def test_check_loaded_rom():
+    check_loaded_rom(GdbClient(FakeGdbServer(SESSION_RUN, rom=ROM.data)), ROM)
+    other = program_rom("bx lr")
+    with pytest.raises(GdbError, match="different ROM"):
+        check_loaded_rom(GdbClient(FakeGdbServer(SESSION_RUN, rom=other.data)), ROM)

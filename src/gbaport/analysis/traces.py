@@ -85,13 +85,17 @@ def parse_trace(text: str, source: str = "trace") -> Trace:
     return trace
 
 
-def load_trace(path: str | Path) -> Trace:
+def load_trace(path: str | Path, sha1: str | None = None) -> Trace:
+    """Read a trace file; with ``sha1``, it must have been recorded on that ROM."""
     path = Path(path)
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         raise TraceError(f"{path}: not a UTF-8 text file") from None
-    return parse_trace(text, str(path))
+    trace = parse_trace(text, str(path))
+    if sha1 is not None and trace.sha1 != sha1:
+        raise TraceError(f"{path}: recorded on ROM sha1 {trace.sha1}, but this ROM is {sha1}")
+    return trace
 
 
 def save_trace(trace: Trace, path: str | Path) -> None:

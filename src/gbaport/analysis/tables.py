@@ -7,6 +7,8 @@ Patterns (``history`` is the current walk before the dispatch):
   ``ldr rX, [rT, rB]`` form). Entries are addresses.
 - ARM ``ldr<ls> pc, [pc, rI, lsl #2]``: entries are addresses starting at dispatch + 8.
 - ARM ``add<ls> pc, pc, rI, lsl #2``: a run of ``b`` instructions at dispatch + 8.
+- GCC Thumb byte table: ``adr rB, table; ldrb rX, [rB, rI]; lsls rX, rX, #1;
+  add pc, rX`` (``ldrsb`` too). Entries are halfword offsets from the ``add pc``.
 
 The entry count comes from the guarding ``cmp rI, #N`` and the unsigned
 condition that guards the dispatch: a ``hi`` branch around it or an ``ls``
@@ -24,6 +26,8 @@ from gbaport.isa.model import Cond, Instruction, Mode, Op, Shift, ShiftKind
 
 MAX_TABLE_ENTRIES = 1024
 _TIMES_4 = Shift(ShiftKind.LSL, 2)
+_TIMES_2 = Shift(ShiftKind.LSL, 1)
+ADDRESSES, BRANCHES, BYTES, SIGNED_BYTES = "addresses", "branches", "bytes", "signed bytes"
 # Entries beyond N for ``cmp rI, #N``, by the condition under which the dispatch runs...
 _DISPATCH_IN_RANGE = {Cond.LS: 1, Cond.CC: 0}
 # ...or by the condition of a branch that skips it.
@@ -44,7 +48,8 @@ class JumpTable:
     table: int  # first entry
     mode: Mode
     targets: tuple[int, ...]
-    data: bool  # True: entries are addresses (data); False: entries are ARM B instructions
+    data: bool  # True: entries are data (addresses or offsets); False: ARM B instructions
+    entry_size: int = 4  # bytes per entry
 
 
 @dataclass(frozen=True)
@@ -63,11 +68,11 @@ def find_jump_table(
     found = _match(dispatch, history)
     override = overrides.get(dispatch.addr)
     if override is not None:
-        holds_addresses = True if found is None else found[2]
-        return TableMatch(_table(dispatch, override.table, override.count, holds_addresses, space))
+        kind = ADDRESSES if found is None else found[2]
+        return TableMatch(_table(dispatch, override.table, override.count, kind, space))
     if found is None:
         return None
-    table, count, holds_addresses = found
+    table, count, kind = found
     if count is None:
         return TableMatch(
             None,
@@ -75,11 +80,11 @@ def find_jump_table(
             f"{{ at = {dispatch.addr:#010x}, table = {table:#010x}, count = N }} "
             "to [code] jump_tables",
         )
-    return TableMatch(_table(dispatch, table, count, holds_addresses, space))
+    return TableMatch(_table(dispatch, table, count, kind, space))
 
 
-def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None, bool] | None:
-    """(table address, entry count or None, entries are addresses) for a known pattern."""
+def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None, str] | None:
+    """(table address, entry count or None, entry kind) for a known pattern."""
     last = len(history) - 1
     if (
         dispatch.op is Op.LDR
@@ -89,22 +94,54 @@ def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None,
         and dispatch.pre
         and dispatch.up
     ):
-        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), True
+        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), ADDRESSES
     if (
         dispatch.op is Op.ADD
         and dispatch.rn == PC
         and dispatch.rm is not None
         and dispatch.shift == _TIMES_4
     ):
-        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), False
+        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), BRANCHES
+    if (
+        dispatch.mode is Mode.THUMB
+        and dispatch.op is Op.ADD
+        and dispatch.rd == PC
+        and dispatch.rn == PC
+        and dispatch.rm not in (None, PC)
+        and dispatch.shift is None
+    ):
+        return _byte_table(dispatch, history)
     if dispatch.op is Op.MOV and dispatch.rm is not None and dispatch.shift is None:
         return _loaded_from_table(dispatch, history)
     return None
 
 
+def _byte_table(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None, str] | None:
+    """Match ``ldrb rY, [base, index]; lsls rX, rY, #1; add pc, rX`` with base known."""
+    i = _definition(history, len(history) - 1, dispatch.rm)
+    if i is None:
+        return None
+    scale = history[i].ins
+    if scale.op is not Op.MOV or scale.rm is None or scale.shift != _TIMES_2:
+        return None
+    j = _definition(history, i - 1, scale.rm)
+    if j is None:
+        return None
+    load = history[j].ins
+    if load.op not in (Op.LDRB, Op.LDRSB) or load.rm is None or load.shift is not None:
+        return None
+    consts = history[j].consts
+    known = [r for r in (load.rn, load.rm) if r in consts]
+    if len(known) != 1 or load.rn == load.rm:
+        return None
+    index = load.rm if known[0] == load.rn else load.rn
+    kind = BYTES if load.op is Op.LDRB else SIGNED_BYTES
+    return consts[known[0]], _bound(history, j - 1, index, dispatch), kind
+
+
 def _loaded_from_table(
     dispatch: Instruction, history: list[Step]
-) -> tuple[int, int | None, bool] | None:
+) -> tuple[int, int | None, str] | None:
     """Match ``ldr rX, [base + index*4]; mov pc, rX`` where exactly one of base/index is known."""
     i = _definition(history, len(history) - 1, dispatch.rm)
     if i is None:
@@ -134,7 +171,7 @@ def _loaded_from_table(
     scale = history[k].ins
     if scale.op is not Op.MOV or scale.rm is None or scale.shift != _TIMES_4:
         return None
-    return consts[known[0]], _bound(history, k - 1, scale.rm, dispatch), True
+    return consts[known[0]], _bound(history, k - 1, scale.rm, dispatch), ADDRESSES
 
 
 def _definition(history: list[Step], start: int, reg: int) -> int | None:
@@ -168,12 +205,20 @@ def _guard(after_compare: list[Step], dispatch: Instruction) -> int | None:
     return _DISPATCH_IN_RANGE.get(dispatch.cond)
 
 
-def _table(
-    dispatch: Instruction, table: int, count: int, holds_addresses: bool, space: CodeSpace
-) -> JumpTable:
-    if not holds_addresses:
+def _table(dispatch: Instruction, table: int, count: int, kind: str, space: CodeSpace) -> JumpTable:
+    if kind == BRANCHES:
         targets = tuple(table + 4 * i for i in range(min(count, MAX_TABLE_ENTRIES)))
         return JumpTable(dispatch.addr, table, dispatch.mode, targets, data=False)
+    if kind in (BYTES, SIGNED_BYTES):
+        base = dispatch.addr + 4  # what the add reads as pc
+        offsets = []
+        for i in range(min(count, MAX_TABLE_ENTRIES)):
+            if not space.contains(table + i):
+                break
+            value = space.read8(table + i)
+            offsets.append(value - 0x100 if kind == SIGNED_BYTES and value & 0x80 else value)
+        targets = tuple((base + 2 * offset) & 0xFFFFFFFE for offset in offsets)
+        return JumpTable(dispatch.addr, table, dispatch.mode, targets, data=True, entry_size=1)
     mask = ~1 if dispatch.mode is Mode.THUMB else ~3
     targets = []
     for i in range(min(count, MAX_TABLE_ENTRIES)):

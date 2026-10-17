@@ -4,15 +4,19 @@ mGBA (Tools > Start GDB server, default port 2345) speaks a subset of the
 protocol: ``g`` returns r0-r15 and the CPSR, ``Z0``/``z0`` set and clear
 breakpoints, ``c`` and ``s`` continue and step, and a raw 0x03 byte stops a
 running game. It acknowledges every packet with ``+`` (even in no-ack mode),
-so the client skips stray ``+`` bytes, and it may answer a breakpoint with
-``S05k``, so stop replies are read by their first three characters only.
+so the client skips stray ``+`` bytes. A breakpoint stop is ``T05hwbreak:;``
+(``S05k`` for clients that do not offer ``hwbreak+``) while a finished step
+is a plain ``S05``. Every 0x03 byte is answered with ``S02``, even when the
+game is already halted, which ``halt`` uses to resynchronise.
 """
 
 import socket
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
 REPLY_TIMEOUT = 5.0  # seconds to wait for the answer to a request
+HALT_TIMEOUT = 1.0  # seconds to wait for the S02 that answers an interrupt
 
 
 class GdbError(ConnectionError):
@@ -69,6 +73,12 @@ class SocketTransport:
 class Stop:
     signal: int  # 5 = trap (breakpoint or step), 2 = interrupt
     exited: bool = False  # the game (or emulator core) ended
+    breakpoint: bool = False  # stopped by a breakpoint rather than by finishing a step
+
+    @property
+    def step(self) -> bool:
+        """A plain ``S05``: the single step finished where it should."""
+        return self.signal == 5 and not self.exited and not self.breakpoint
 
 
 @dataclass(frozen=True)
@@ -116,6 +126,16 @@ class GdbClient:
         words = [int.from_bytes(bytes.fromhex(reply[i : i + 8]), "little") for i in range(0, 136, 8)]
         return Registers(tuple(words[:16]), words[16])
 
+    def read_memory(self, addr: int, length: int) -> bytes:
+        reply = self.request(f"m{addr:x},{length:x}")
+        try:
+            data = bytes.fromhex(reply)
+        except ValueError:
+            data = b""
+        if len(data) != length:
+            raise GdbError(f"cannot read {length} bytes at {addr:#010x}: {reply[:20]!r}")
+        return data
+
     def set_breakpoint(self, addr: int, size: int) -> None:
         self._expect_ok(f"Z0,{addr:x},{size}")
 
@@ -141,8 +161,25 @@ class GdbClient:
         if reply[:1] in ("W", "X"):
             return Stop(int(reply[1:3] or "0", 16), exited=True)
         if reply[:1] in ("S", "T") and len(reply) >= 3:
-            return Stop(int(reply[1:3], 16))
+            reason = reply[3:]
+            breakpoint = reason == "k" or reason.startswith(("hwbreak", "swbreak"))
+            return Stop(int(reply[1:3], 16), breakpoint=breakpoint)
         raise GdbError(f"unexpected stop reply {reply!r}")
+
+    def halt(self, timeout: float = HALT_TIMEOUT) -> None:
+        """Stop the game and resynchronise with the server.
+
+        mGBA answers every 0x03 with ``S02``, even when the game is already
+        halted, so everything that arrives before it (a stop already in
+        flight, the answer to a request cut short by Ctrl+C) is stale and
+        dropped. A server that stays silent when halted just times out.
+        """
+        self.interrupt()
+        deadline = time.monotonic() + timeout
+        while (left := deadline - time.monotonic()) > 0:
+            reply = self._receive(left)
+            if reply is None or reply.startswith(("S02", "T02")):
+                return
 
     def close(self) -> None:
         self.transport.close()
