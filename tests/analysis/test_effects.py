@@ -1,7 +1,13 @@
 import pytest
 from progkit import decode_one, decode_program, program_space
 
-from gbaport.analysis.effects import RegState, interwork_target, pc_value, written_registers
+from gbaport.analysis.effects import (
+    RegState,
+    interwork_target,
+    pc_value,
+    read_registers,
+    written_registers,
+)
 from gbaport.isa.model import Mode
 
 
@@ -31,6 +37,27 @@ def run_states(source: str, count: int, *, thumb: bool = False) -> RegState:
 def test_written_registers(text, thumb, expected):
     assert written_registers(decode_one(text, thumb=thumb)) == expected
 
+
+
+@pytest.mark.parametrize(
+    "text,thumb,expected",
+    [
+        ("adds r0, r1, r2", True, {1, 2}),
+        ("mov r0, r1, lsl r2", False, {1, 2}),
+        ("mov r0, #1", False, set()),
+        ("ldr r0, [lr, #4]", False, {14}),
+        ("ldr r0, [pc, #4]", True, {15}),
+        ("str r0, [r1, r2]", False, {0, 1, 2}),
+        ("push {r4, lr}", True, {4, 13, 14}),
+        ("pop {r4, pc}", True, {13}),
+        ("mla r0, r1, r2, r3", False, {1, 2, 3}),
+        ("umlal r0, r1, r2, r3", False, {0, 1, 2, 3}),
+        ("bx lr", True, {14}),
+        ("bl #0x08000100", True, set()),
+    ],
+)
+def test_read_registers(text, thumb, expected):
+    assert read_registers(decode_one(text, thumb=thumb)) == expected
 
 def test_pc_value_and_interworking():
     assert pc_value(decode_one("bx lr")) == 0x080000C8

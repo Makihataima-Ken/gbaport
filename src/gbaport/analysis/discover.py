@@ -2,16 +2,27 @@
 
 From the seed entry points, walk instructions linearly and follow branches,
 calls, jump tables and indirect transfers whose target is a known constant.
-Each linear walk tracks register constants (reset at the start of every walk),
-so ``ldr r0, =func; bx r0`` style transfers resolve. Anything the walk cannot
-follow becomes an ``Issue``; nothing in the ROM can make it raise.
+Each linear walk tracks register constants (reset at the start of every walk
+and at every address other paths also reach), so ``ldr r0, =func; bx r0``
+style transfers resolve. A constant a walk leaves in LR when it leaves for
+elsewhere (``ldr lr, =main; b init``) is where that code returns to, so it
+becomes an entry too. Anything the walk cannot follow becomes an ``Issue``;
+nothing in the ROM can make it raise.
 """
 
 from collections import deque
 from dataclasses import dataclass, field
 
 from gbaport.analysis.config import GameConfig
-from gbaport.analysis.effects import LR, MASK, PC, RegState, interwork_target
+from gbaport.analysis.effects import (
+    LR,
+    MASK,
+    PC,
+    RegState,
+    interwork_target,
+    read_registers,
+    written_registers,
+)
 from gbaport.analysis.flow import Flow, FlowKind, classify
 from gbaport.analysis.space import CodeSpace
 from gbaport.analysis.tables import JumpTable, Step, find_jump_table
@@ -23,6 +34,7 @@ from gbaport.isa.thumb import decode_thumb
 IRQ_VECTOR = 0x03007FFC  # the BIOS enters the IRQ handler stored here, in ARM state
 HISTORY_LIMIT = 16
 _LITERAL_SIZES = {Op.LDR: 4, Op.LDRH: 2, Op.LDRSH: 2, Op.LDRB: 1, Op.LDRSB: 1}
+_LEAVES = frozenset({FlowKind.BRANCH, FlowKind.JUMP, FlowKind.INDIRECT, FlowKind.RETURN})
 
 
 @dataclass(frozen=True)
@@ -49,19 +61,32 @@ class Exploration:
 def explore(
     space: CodeSpace, seeds: list[tuple[int, Mode, str]], config: GameConfig | None = None
 ) -> Exploration:
-    """Discover the code reachable from ``seeds`` of (address, mode, entry kind)."""
-    explorer = _Explorer(space, config or GameConfig())
-    for addr, mode, kind in seeds:
-        explorer.add_entry(addr, mode, kind, origin=addr)
-    explorer.drain()
-    return explorer.ex
+    """Discover the code reachable from ``seeds`` of (address, mode, entry kind).
+
+    Walks forget their constants at branch targets and entries, because other
+    paths reach those too. Which addresses those are is only known after a
+    pass, so discovery repeats with every target found so far until a pass
+    finds no new one (the set only grows, so this ends).
+    """
+    config = config or GameConfig()
+    leaders: frozenset[int] = frozenset()
+    while True:
+        explorer = _Explorer(space, config, leaders)
+        for addr, mode, kind in seeds:
+            explorer.add_entry(addr, mode, kind, origin=addr)
+        explorer.drain()
+        if explorer.targets <= leaders:
+            return explorer.ex
+        leaders |= explorer.targets
 
 
 class _Explorer:
-    def __init__(self, space: CodeSpace, config: GameConfig) -> None:
+    def __init__(self, space: CodeSpace, config: GameConfig, leaders: frozenset[int]) -> None:
         self.space = space
         self.data = config.data
         self.overrides = {table.at: table for table in config.jump_tables}
+        self.leaders = leaders  # join points: walks reaching them forget their constants
+        self.targets: set[int] = set()  # every branch target and entry found in this pass
         self.ex = Exploration()
         self.work: deque[tuple[int, Mode]] = deque()
 
@@ -82,6 +107,7 @@ class _Explorer:
                 "add a [[ram_code]] entry if the game copies code there",
             )
             return None
+        self.targets.add(addr)
         if addr not in self.ex.entries:
             self.ex.entries[addr] = mode
             self.ex.entry_kinds[addr] = kind
@@ -93,29 +119,40 @@ class _Explorer:
         if not self.space.contains(addr, 2):
             self.issue(origin, "outside_code", f"branch target {addr:#010x} is outside the ROM")
             return None
+        self.targets.add(addr)
         self.work.append((addr, mode))
         return addr
 
     def walk(self, addr: int, mode: Mode) -> None:
+        start = addr
         state = RegState()
         history: list[Step] = []
         prev: Instruction | None = None
+        lr_set = False  # LR holds a constant this walk wrote and nothing has read since
         while True:
+            if addr != start and addr in self.leaders:
+                state, history, prev, lr_set = RegState(), [], None, False
             ins = self._take(addr, mode)
             if ins is None:
                 return
             self._note_literal(ins)
             self._note_irq_vector(ins, state)
             flow = classify(ins, state, prev, self.space)
+            if lr_set and flow.kind in _LEAVES and not flow.falls_through:
+                self._note_return_site(ins, state)
             successors, keep_going = self._follow(ins, flow, state, history)
             self.ex.successors[addr] = tuple(dict.fromkeys(successors))
             if not keep_going:
                 return
             history.append(Step(ins, dict(state.consts)))
             del history[:-HISTORY_LIMIT]
+            if LR in read_registers(ins):
+                lr_set = False
             state.step(ins, self.space)
             if flow.kind is FlowKind.CALL:
                 state.forget_call_clobbered()
+            if LR in written_registers(ins):
+                lr_set = LR in state.consts
             prev = ins
             addr += ins.size
 
@@ -181,6 +218,15 @@ class _Explorer:
         offset = ins.imm if ins.up else -ins.imm
         if (base + offset) & MASK == IRQ_VECTOR:
             self.add_entry(value & ~3, Mode.ARM, "irq", origin=ins.addr)
+
+    def _note_return_site(self, ins: Instruction, state: RegState) -> None:
+        """A code address left in LR is where the code this walk leaves for returns to."""
+        value = state.consts.get(LR)
+        if value is None:
+            return
+        target, mode = interwork_target(value)
+        if self.space.contains(self.space.canonical(target), 2):
+            self.add_entry(target, mode, "return", origin=ins.addr)
 
     def _follow(
         self, ins: Instruction, flow: Flow, state: RegState, history: list[Step]

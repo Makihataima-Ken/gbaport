@@ -143,3 +143,55 @@ def test_garbage_never_crashes():
             data = bytearray(build_rom(size=0x1000))
             data[0xC0:] = rng.randbytes(0x1000 - 0xC0)
             explore(CodeSpace(RomImage(bytes(data))), [(CODE_ADDR, mode, "seed")])
+
+
+def test_constants_do_not_flow_into_a_join_point():
+    source = """
+        ldr r0, pa
+        cmp r1, #0
+        beq L
+        ldr r0, pb
+    L:  bx r0
+    .align 2
+    pa: .word fa+1
+    pb: .word fb+1
+    fa: bx lr
+    fb: bx lr
+    """
+    ex = explore_program(source, thumb=True)
+    assert 0x080000C8 not in ex.jumps
+    assert (0x080000C8, "unresolved_jump") in kinds(ex)
+
+
+def test_constant_left_in_lr_becomes_an_entry():
+    source = """
+        ldr lr, p
+        b h
+    h:  bx lr
+    p:  .word m+1
+    .thumb
+    m:  bx lr
+    """
+    ex = explore_program(source)
+    assert ex.entry_kinds[0x080000D0] == "return"
+    assert ex.entries[0x080000D0] is Mode.THUMB
+    assert ex.issues == []
+
+
+def test_lr_used_as_a_scratch_register_is_not_followed():
+    source = """
+        ldr lr, p
+        ldr r0, [lr]
+        b h
+    h:  bx lr
+    p:  .word m+1
+    .thumb
+    m:  bx lr
+    """
+    assert 0x080000D4 not in explore_program(source).entries
+
+
+def test_lr_constant_outside_code_is_ignored():
+    ex = explore_program("mov lr, #0x04000000\nb h\nh: bx lr")
+    assert list(ex.entries) == [CODE_ADDR]
+    assert ex.issues == []

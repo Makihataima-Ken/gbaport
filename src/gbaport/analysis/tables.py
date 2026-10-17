@@ -8,8 +8,11 @@ Patterns (``history`` is the current walk before the dispatch):
 - ARM ``ldr<ls> pc, [pc, rI, lsl #2]``: entries are addresses starting at dispatch + 8.
 - ARM ``add<ls> pc, pc, rI, lsl #2``: a run of ``b`` instructions at dispatch + 8.
 
-The entry count always comes from the guarding ``cmp rI, #N`` (N + 1 entries);
-without it the table is reported instead of guessed.
+The entry count comes from the guarding ``cmp rI, #N`` and the unsigned
+condition that guards the dispatch: a ``hi`` branch around it or an ``ls``
+dispatch gives N + 1 entries, ``hs`` / ``lo`` give N. Without such a guard the
+table is reported instead of guessed. An override from ``game.toml`` supplies
+the table and count but keeps the pattern's entry kind (addresses or branches).
 """
 
 from dataclasses import dataclass
@@ -17,10 +20,14 @@ from dataclasses import dataclass
 from gbaport.analysis.config import JumpTableOverride
 from gbaport.analysis.effects import PC, written_registers
 from gbaport.analysis.space import CodeSpace
-from gbaport.isa.model import Instruction, Mode, Op, Shift, ShiftKind
+from gbaport.isa.model import Cond, Instruction, Mode, Op, Shift, ShiftKind
 
 MAX_TABLE_ENTRIES = 1024
 _TIMES_4 = Shift(ShiftKind.LSL, 2)
+# Entries beyond N for ``cmp rI, #N``, by the condition under which the dispatch runs...
+_DISPATCH_IN_RANGE = {Cond.LS: 1, Cond.CC: 0}
+# ...or by the condition of a branch that skips it.
+_BRANCH_OUT_OF_RANGE = {Cond.HI: 1, Cond.CS: 0}
 
 
 @dataclass(frozen=True)
@@ -53,10 +60,11 @@ def find_jump_table(
     overrides: dict[int, JumpTableOverride],
 ) -> TableMatch | None:
     """The table ``dispatch`` jumps through, or None when no known pattern matches."""
+    found = _match(dispatch, history)
     override = overrides.get(dispatch.addr)
     if override is not None:
-        return TableMatch(_address_table(dispatch, override.table, override.count, space))
-    found = _match(dispatch, history)
+        holds_addresses = True if found is None else found[2]
+        return TableMatch(_table(dispatch, override.table, override.count, holds_addresses, space))
     if found is None:
         return None
     table, count, holds_addresses = found
@@ -67,10 +75,7 @@ def find_jump_table(
             f"{{ at = {dispatch.addr:#010x}, table = {table:#010x}, count = N }} "
             "to [code] jump_tables",
         )
-    if holds_addresses:
-        return TableMatch(_address_table(dispatch, table, count, space))
-    targets = tuple(table + 4 * i for i in range(min(count, MAX_TABLE_ENTRIES)))
-    return TableMatch(JumpTable(dispatch.addr, table, dispatch.mode, targets, data=False))
+    return TableMatch(_table(dispatch, table, count, holds_addresses, space))
 
 
 def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None, bool] | None:
@@ -84,22 +89,24 @@ def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None,
         and dispatch.pre
         and dispatch.up
     ):
-        return dispatch.addr + 8, _bound(history, last, dispatch.rm), True
+        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), True
     if (
         dispatch.op is Op.ADD
         and dispatch.rn == PC
         and dispatch.rm is not None
         and dispatch.shift == _TIMES_4
     ):
-        return dispatch.addr + 8, _bound(history, last, dispatch.rm), False
+        return dispatch.addr + 8, _bound(history, last, dispatch.rm, dispatch), False
     if dispatch.op is Op.MOV and dispatch.rm is not None and dispatch.shift is None:
-        return _loaded_from_table(dispatch.rm, history)
+        return _loaded_from_table(dispatch, history)
     return None
 
 
-def _loaded_from_table(reg: int, history: list[Step]) -> tuple[int, int | None, bool] | None:
-    """Match ``ldr reg, [base + index*4]`` where exactly one of base/index is a constant."""
-    i = _definition(history, len(history) - 1, reg)
+def _loaded_from_table(
+    dispatch: Instruction, history: list[Step]
+) -> tuple[int, int | None, bool] | None:
+    """Match ``ldr rX, [base + index*4]; mov pc, rX`` where exactly one of base/index is known."""
+    i = _definition(history, len(history) - 1, dispatch.rm)
     if i is None:
         return None
     load = history[i].ins
@@ -127,7 +134,7 @@ def _loaded_from_table(reg: int, history: list[Step]) -> tuple[int, int | None, 
     scale = history[k].ins
     if scale.op is not Op.MOV or scale.rm is None or scale.shift != _TIMES_4:
         return None
-    return consts[known[0]], _bound(history, k - 1, scale.rm), True
+    return consts[known[0]], _bound(history, k - 1, scale.rm, dispatch), True
 
 
 def _definition(history: list[Step], start: int, reg: int) -> int | None:
@@ -138,18 +145,35 @@ def _definition(history: list[Step], start: int, reg: int) -> int | None:
     return None
 
 
-def _bound(history: list[Step], start: int, reg: int) -> int | None:
-    """Entry count from a ``cmp reg, #N`` at or before ``start``, if ``reg`` is unchanged since."""
+def _bound(history: list[Step], start: int, reg: int, dispatch: Instruction) -> int | None:
+    """Entry count from a ``cmp reg, #N`` at or before ``start`` and the guard on its flags."""
     for i in range(start, -1, -1):
         ins = history[i].ins
         if ins.op is Op.CMP and ins.rn == reg and ins.imm is not None:
-            return ins.imm + 1
+            extra = _guard(history[i + 1 :], dispatch)
+            return None if extra is None else ins.imm + extra
         if reg in written_registers(ins):
             return None
     return None
 
 
-def _address_table(dispatch: Instruction, table: int, count: int, space: CodeSpace) -> JumpTable:
+def _guard(after_compare: list[Step], dispatch: Instruction) -> int | None:
+    """Entries beyond N that the unsigned guard on the compare's flags allows, if there is one."""
+    for step in after_compare:
+        ins = step.ins
+        if ins.op is Op.B and ins.cond is not Cond.AL:
+            return _BRANCH_OUT_OF_RANGE.get(ins.cond)
+        if ins.s or ins.op is Op.MSR:  # the flags no longer come from the compare
+            return None
+    return _DISPATCH_IN_RANGE.get(dispatch.cond)
+
+
+def _table(
+    dispatch: Instruction, table: int, count: int, holds_addresses: bool, space: CodeSpace
+) -> JumpTable:
+    if not holds_addresses:
+        targets = tuple(table + 4 * i for i in range(min(count, MAX_TABLE_ENTRIES)))
+        return JumpTable(dispatch.addr, table, dispatch.mode, targets, data=False)
     mask = ~1 if dispatch.mode is Mode.THUMB else ~3
     targets = []
     for i in range(min(count, MAX_TABLE_ENTRIES)):

@@ -28,7 +28,7 @@ class Block:
 class Function:
     entry: int
     mode: Mode
-    kind: str  # how it was found: seed, call, veneer, jump or irq
+    kind: str  # how it was found: seed, call, veneer, jump, irq or return
     blocks: tuple[int, ...]
     calls: tuple[int, ...]
     tail_calls: tuple[int, ...]

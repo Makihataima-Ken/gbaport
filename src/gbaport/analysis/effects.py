@@ -23,6 +23,7 @@ _STORES = frozenset({Op.STR, Op.STRB, Op.STRH})
 _TRANSFERS = _LOADS | _STORES | {Op.LDM, Op.STM}
 _LONG_MULTIPLY = frozenset({Op.UMULL, Op.UMLAL, Op.SMULL, Op.SMLAL})
 _SINGLE_DEST = frozenset({Op.MUL, Op.MLA, Op.SWP, Op.SWPB, Op.MRS}) | _LOADS
+_ACCUMULATE_LONG = frozenset({Op.UMLAL, Op.SMLAL})
 
 
 def pc_value(ins: Instruction) -> int:
@@ -56,6 +57,22 @@ def written_registers(ins: Instruction) -> frozenset[int]:
     regs.discard(PC)
     return frozenset(regs)
 
+
+
+def read_registers(ins: Instruction) -> frozenset[int]:
+    """Registers ``ins`` may read; r15 is included when it is an operand."""
+    regs = {r for r in (ins.rn, ins.rm, ins.rs) if r is not None}
+    if ins.shift is not None and ins.shift.reg is not None:
+        regs.add(ins.shift.reg)
+    if ins.op in _STORES:
+        regs.add(ins.rd)
+    elif ins.op is Op.STM:
+        regs.update(ins.reglist)
+    elif ins.op in _ACCUMULATE_LONG:
+        regs.update((ins.rd, ins.rd_hi))
+    elif ins.op is Op.BL_LO:
+        regs.add(LR)
+    return frozenset(regs)
 
 def computed_value(ins: Instruction, state: "RegState", space: CodeSpace) -> int | None:
     """The value ``ins`` writes to its destination, when it is a known constant.
