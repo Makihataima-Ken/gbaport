@@ -21,3 +21,4 @@ Design: `docs/superpowers/specs/2026-10-17-gba-native-port-design.md`
 
     uv run gbaport info roms/mygame.gba [--json]
     uv run gbaport disasm roms/mygame.gba --start 0x080000c0 --count 40 [--thumb]
+    uv run gbaport analyze roms/mygame.gba [--config games/XXXX/game.toml] [--out build/analysis.json]

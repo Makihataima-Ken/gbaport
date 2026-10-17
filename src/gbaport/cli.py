@@ -3,10 +3,14 @@
 import argparse
 import json
 import sys
+from pathlib import Path
 
 from gbaport import __version__
+from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issues, summary_lines
+from gbaport.analysis.config import GameConfig, default_config_path, load_config
 from gbaport.disasm import disassemble, format_line
 from gbaport.isa.model import Mode
+from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
 
@@ -19,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     _add_info_command(commands)
     _add_disasm_command(commands)
+    _add_analyze_command(commands)
     return parser
 
 
@@ -59,6 +64,35 @@ def _run_disasm(args: argparse.Namespace) -> int:
     mode = Mode.THUMB if args.thumb else Mode.ARM
     for ins in disassemble(RomImage.load(args.rom), args.start, args.count, mode):
         print(format_line(ins))
+    return 0
+
+
+def _add_analyze_command(commands) -> None:
+    analyze = commands.add_parser("analyze", help="discover functions, blocks and jump tables")
+    analyze.add_argument("rom", help="path to a .gba file")
+    analyze.add_argument(
+        "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
+    )
+    analyze.add_argument("--out", help="write the full analysis as JSON to this file")
+    analyze.add_argument("--issues", type=int, default=20, help="issues to list (default 20)")
+    analyze.set_defaults(handler=_run_analyze)
+
+
+def _run_analyze(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    config_path = args.config or default_config_path(parse_header(rom).game_code)
+    config = load_config(config_path) if config_path else GameConfig()
+    analysis = analyze_rom(rom, config)
+    if config_path:
+        print(f"{'config':<13}{config_path}")
+    for line in summary_lines(analysis):
+        print(line)
+    for issue in sorted_issues(analysis.exploration)[: args.issues]:
+        print(f"  {issue.addr:08x}  {issue.kind:<16}  {issue.detail}")
+    if args.out:
+        document = json.dumps(analysis_to_dict(analysis), indent=1)
+        Path(args.out).write_text(document, encoding="utf-8")
+        print(f"wrote {args.out}")
     return 0
 
 
