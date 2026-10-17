@@ -240,3 +240,27 @@ dst: .word 0x03000000
 cnt: .word 0x84000002
 entry: .word 0x03000004
 """
+
+
+# ARM: main calls an unknown function pointer through a veneer; the function
+# it reaches (target) makes a second unknown call with the `mov lr, pc` idiom.
+#   c8 bl via_r3   d4 via_r3   d8 target   e4 its bx r0   f0 second
+SESSION_PROGRAM = """
+main:
+    push {lr}
+    ldr r3, [r0]
+    bl via_r3
+    pop {lr}
+    bx lr
+via_r3:
+    bx r3
+target:
+    push {lr}
+    ldr r0, [r1]
+    mov lr, pc
+    bx r0
+    pop {lr}
+    bx lr
+second:
+    bx lr
+"""
