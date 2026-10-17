@@ -18,3 +18,5 @@ Design: `docs/superpowers/specs/2026-10-17-gba-native-port-design.md`
     uv run ruff check src tests
 
 ## Commands
+
+    uv run gbaport info roms/mygame.gba [--json]
