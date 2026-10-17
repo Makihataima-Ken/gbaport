@@ -132,7 +132,7 @@ save = "flash128k"             # override auto-detection when needed
 entries = [0x08000204, 0x080A1C30]          # extra function entry points
 thumb_entries = [0x08012345]
 data = [[0x08100000, 0x08180000]]           # ranges that are never code
-jump_tables = [{ at = 0x0801F00C, count = 12, mode = "thumb" }]
+jump_tables = [{ at = 0x0801F00C, table = 0x0801F010, count = 12 }]  # at = the dispatch instruction
 
 [[ram_code]]                   # blobs copied from ROM to RAM and executed there
 rom = 0x080F0000
