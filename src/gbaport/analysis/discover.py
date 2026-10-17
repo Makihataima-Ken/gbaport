@@ -9,6 +9,10 @@ elsewhere (``ldr lr, =main; b init``) is where that code returns to, so it
 becomes an entry too. Indirect transfers the walk cannot resolve take their
 targets from recorded traces when there are any. Anything else the walk
 cannot follow becomes an ``Issue``; nothing in the ROM can make it raise.
+
+Walks also record copies the game makes with constant operands (DMA register
+writes, BIOS CpuSet/CpuFastSet) and the code addresses they wanted to reach
+outside analysable code, so the analysis can recognise code copied into RAM.
 """
 
 from collections import deque
@@ -31,6 +35,10 @@ from gbaport.isa.fmt import format_instruction
 from gbaport.isa.model import Cond, Instruction, Mode, Op
 
 IRQ_VECTOR = 0x03007FFC  # the BIOS enters the IRQ handler stored here, in ARM state
+DMA_BASE = 0x040000B0  # DMA0SAD; each of the 4 channels is SAD, DAD, CNT_L, CNT_H (12 bytes)
+DMA_END = DMA_BASE + 4 * 12
+_DMA_NOT_A_PLAIN_COPY = 0x31E0  # CNT_H: start timing, or a source/destination that is not +1
+CPU_SET, CPU_FAST_SET = 0x0B, 0x0C
 HISTORY_LIMIT = 16
 _LITERAL_SIZES = {Op.LDR: 4, Op.LDRH: 2, Op.LDRSH: 2, Op.LDRB: 1, Op.LDRSB: 1}
 _LEAVES = frozenset({FlowKind.BRANCH, FlowKind.JUMP, FlowKind.INDIRECT, FlowKind.RETURN})
@@ -41,6 +49,14 @@ class Issue:
     addr: int
     kind: str
     detail: str
+
+
+@dataclass(frozen=True)
+class RamCopy:
+    site: int  # the store or SWI that starts the copy
+    src: int
+    dst: int
+    size: int  # bytes
 
 
 @dataclass
@@ -57,6 +73,8 @@ class Exploration:
     issues: list[Issue] = field(default_factory=list)
     # Indirect site -> targets taken from traces: callees, switch cases, or functions it leaves for.
     traced: dict[int, tuple[int, ...]] = field(default_factory=dict)
+    copies: list[RamCopy] = field(default_factory=list)
+    outside: dict[int, Mode] = field(default_factory=dict)  # code wanted outside the code space
 
 
 Traced = dict[int, tuple[tuple[int, Mode], ...]]  # site -> (target, mode) seen in traces
@@ -151,6 +169,7 @@ class _Explorer:
     def add_entry(self, addr: int, mode: Mode, kind: str, origin: int) -> int | None:
         addr = self.space.canonical(addr)
         if not self.space.contains(addr, 2):
+            self.ex.outside.setdefault(addr, mode)
             self.issue(
                 origin,
                 "outside_code",
@@ -168,6 +187,7 @@ class _Explorer:
     def add_branch(self, addr: int, mode: Mode, origin: int) -> int | None:
         addr = self.space.canonical(addr)
         if not self.space.contains(addr, 2):
+            self.ex.outside.setdefault(addr, mode)
             self.issue(origin, "outside_code", f"branch target {addr:#010x} is outside the ROM")
             return None
         self.targets.add(addr)
@@ -180,14 +200,16 @@ class _Explorer:
         history: list[Step] = []
         prev: Instruction | None = None
         lr_set = False  # LR holds a constant this walk wrote and nothing has read since
+        dma: dict[int, int] = {}  # DMA register halfwords this walk wrote with constants
         while True:
             if addr != start and addr in self.leaders:
-                state, history, prev, lr_set = RegState(), [], None, False
+                state, history, prev, lr_set, dma = RegState(), [], None, False, {}
             ins = self._take(addr, mode)
             if ins is None:
                 return
             self._note_literal(ins)
             self._note_irq_vector(ins, state)
+            self._note_copy(ins, state, dma)
             flow = classify(ins, state, prev, self.space)
             if lr_set and flow.kind in _LEAVES and not flow.falls_through:
                 self._note_return_site(ins, state)
@@ -260,6 +282,60 @@ class _Explorer:
         offset = ins.imm if ins.up else -ins.imm
         if (base + offset) & MASK == IRQ_VECTOR:
             self.add_entry(value & ~3, Mode.ARM, "irq", origin=ins.addr)
+
+    def _note_copy(self, ins: Instruction, state: RegState, dma: dict[int, int]) -> None:
+        """Record copies started by DMA register writes or CpuSet/CpuFastSet with known operands.
+
+        Conditional stores count as made: start-up code guards the DMA start with
+        ``strne`` on the count, and adoption still needs code wanted inside the copy.
+        """
+        if ins.op is Op.SWI:
+            if ins.cond is Cond.AL:
+                self._note_cpu_set(ins, state)
+            return
+        started = []
+        for addr, value, size in _stores(ins, state):
+            for offset in range(0, size, 2):
+                half = addr + offset
+                if not DMA_BASE <= half < DMA_END:
+                    continue
+                if value is None:
+                    dma.pop(half, None)
+                else:
+                    dma[half] = (value >> (8 * offset)) & 0xFFFF
+                if (half - DMA_BASE) % 12 == 10:  # CNT_H: this write may start the channel
+                    started.append(half - 10)
+        for base in started:
+            self._note_dma(ins, base, dma)
+
+    def _note_dma(self, ins: Instruction, base: int, dma: dict[int, int]) -> None:
+        """Record the transfer of the channel at ``base`` if every register is a known constant."""
+        halves = [dma.get(base + offset) for offset in range(0, 12, 2)]
+        if None in halves:
+            return
+        sad_lo, sad_hi, dad_lo, dad_hi, count, control = halves
+        if not control & 0x8000 or control & _DMA_NOT_A_PLAIN_COPY:
+            return
+        limit = 0x10000 if base == DMA_BASE + 3 * 12 else 0x4000  # DMA3 has a 16-bit count
+        count = count & (limit - 1) or limit
+        unit = 4 if control & 0x0400 else 2
+        src, dst = sad_lo | sad_hi << 16, dad_lo | dad_hi << 16
+        self.ex.copies.append(RamCopy(ins.addr, src, dst, count * unit))
+
+    def _note_cpu_set(self, ins: Instruction, state: RegState) -> None:
+        number = ins.imm >> 16 if ins.mode is Mode.ARM else ins.imm
+        if number not in (CPU_SET, CPU_FAST_SET):
+            return
+        src, dst, control = (state.value(reg, ins) for reg in (0, 1, 2))
+        if src is None or dst is None or control is None or control & 0x01000000:
+            return  # unknown operands, or a fill
+        count = control & 0x1FFFFF
+        if number == CPU_FAST_SET:
+            size = -(-count // 8) * 32  # whole blocks of eight words
+        else:
+            size = count * (4 if control & 0x04000000 else 2)
+        if size:
+            self.ex.copies.append(RamCopy(ins.addr, src, dst, size))
 
     def _note_return_site(self, ins: Instruction, state: RegState) -> None:
         """A code address left in LR is where the code this walk leaves for returns to."""
@@ -395,3 +471,23 @@ class _Explorer:
         targets = tuple(sorted({t for t in found if t is not None}))
         self.ex.traced[ins.addr] = targets
         return targets if switch else ()
+
+
+def _stores(ins: Instruction, state: RegState) -> list[tuple[int, int | None, int]]:
+    """(address, value or None, size) for each word or halfword store at a known address."""
+    if ins.op in (Op.STR, Op.STRH) and ins.rm is None:
+        base = state.value(ins.rn, ins)
+        if base is None:
+            return []
+        offset = ins.imm if ins.up else -ins.imm
+        size = 4 if ins.op is Op.STR else 2
+        value = state.value(ins.rd, ins)
+        if value is not None and size == 2:
+            value &= 0xFFFF
+        return [((base + offset if ins.pre else base) & MASK & -size, value, size)]
+    if ins.op is Op.STM and not ins.pre and ins.up:  # stmia
+        base = state.value(ins.rn, ins)
+        if base is None:
+            return []
+        return [((base + 4 * i) & MASK, state.value(r, ins), 4) for i, r in enumerate(ins.reglist)]
+    return []

@@ -1,5 +1,6 @@
 """Register effects and the constants one linear walk can track."""
 
+import operator
 from dataclasses import dataclass, field
 
 from gbaport.analysis.space import CodeSpace
@@ -23,6 +24,14 @@ _STORES = frozenset({Op.STR, Op.STRB, Op.STRH})
 _TRANSFERS = _LOADS | _STORES | {Op.LDM, Op.STM}
 _LONG_MULTIPLY = frozenset({Op.UMULL, Op.UMLAL, Op.SMULL, Op.SMLAL})
 _SINGLE_DEST = frozenset({Op.MUL, Op.MLA, Op.SWP, Op.SWPB, Op.MRS}) | _LOADS
+_BINARY = {
+    Op.ADD: operator.add,
+    Op.SUB: operator.sub,
+    Op.ORR: operator.or_,
+    Op.AND: operator.and_,
+    Op.EOR: operator.xor,
+    Op.BIC: lambda a, b: a & ~b,
+}
 _ACCUMULATE_LONG = frozenset({Op.UMLAL, Op.SMLAL})
 
 
@@ -77,15 +86,16 @@ def read_registers(ins: Instruction) -> frozenset[int]:
 def computed_value(ins: Instruction, state: "RegState", space: CodeSpace) -> int | None:
     """The value ``ins`` writes to its destination, when it is a known constant.
 
-    Covers literal loads, and MOV/MVN/ADD/SUB with immediate or known-register
-    operands (immediate shifts included). The condition code is not checked.
+    Covers literal loads, and MOV/MVN/ADD/SUB/ORR/AND/EOR/BIC with immediate or
+    known-register operands (immediate shifts included). The condition code is
+    not checked.
     """
     op = ins.op
     if op is Op.LDR:
         if ins.rn == PC and ins.target is not None and space.contains(ins.target, 4):
             return space.read32(ins.target)
         return None
-    if op not in (Op.MOV, Op.MVN, Op.ADD, Op.SUB):
+    if op not in _BINARY and op not in (Op.MOV, Op.MVN):
         return None
     if ins.target is not None:  # Thumb ADR
         return ins.target
@@ -104,7 +114,7 @@ def computed_value(ins: Instruction, state: "RegState", space: CodeSpace) -> int
     base = state.value(ins.rn, ins)
     if base is None:
         return None
-    return (base + operand) & MASK if op is Op.ADD else (base - operand) & MASK
+    return _BINARY[op](base, operand) & MASK
 
 
 def _shifted(value: int, shift: Shift) -> int | None:

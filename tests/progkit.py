@@ -222,3 +222,21 @@ def explore_program(
     mode = Mode.THUMB if thumb else Mode.ARM
     seeds = seeds or [(CODE_ADDR, mode, "seed")]
     return explore(space, seeds, config, traced=traced, candidates=candidates or [])
+
+
+# ARM DMA3 copy of two words from ROM 0x08000200 to IWRAM 0x03000000, then a jump into the copy.
+#   d8 the CNT store that starts the copy   e8 cnt   ec entry
+DMA_COPY = """
+    mov r0, #0x04000000
+    ldr r1, src
+    str r1, [r0, #0xd4]
+    ldr r1, dst
+    str r1, [r0, #0xd8]
+    ldr r1, cnt
+    str r1, [r0, #0xdc]
+    ldr pc, entry
+src: .word 0x08000200
+dst: .word 0x03000000
+cnt: .word 0x84000002
+entry: .word 0x03000004
+"""

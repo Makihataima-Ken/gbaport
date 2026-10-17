@@ -1,9 +1,11 @@
 import random
 
+import pytest
 from progkit import (
     ARM_TABLES,
     CODE_ADDR,
     CRT0,
+    DMA_COPY,
     IRQ_IN_RAM,
     KNOWN_JUMP,
     RECURSION,
@@ -15,7 +17,7 @@ from progkit import (
 from romkit import build_rom
 
 from gbaport.analysis.config import GameConfig, JumpTableOverride
-from gbaport.analysis.discover import explore
+from gbaport.analysis.discover import RamCopy, explore
 from gbaport.analysis.space import CodeSpace
 from gbaport.analysis.tables import JumpTable
 from gbaport.isa.model import Mode
@@ -281,3 +283,75 @@ def test_candidates_never_land_in_data():
     source = "ldr r0, lit\nbx lr\nlit: .word 0"
     ex = explore_program(source, candidates=[(0x080000C8, Mode.ARM, "pointer")])
     assert 0x080000C8 not in ex.entries
+
+
+@pytest.mark.parametrize(
+    "control,size",
+    [
+        ("0x84000002", 8),  # 2 words, 32-bit units
+        ("0x80000004", 8),  # 4 halfwords
+        ("0x85000002", None),  # fixed source: a fill, not a copy
+        ("0x94000002", None),  # starts at VBlank, not now
+        ("0x04000002", None),  # not enabled
+    ],
+)
+def test_dma_copies_with_known_operands(control, size):
+    ex = explore_program(DMA_COPY.replace("0x84000002", control))
+    expected = [] if size is None else [RamCopy(0x080000D8, 0x08000200, 0x03000000, size)]
+    assert ex.copies == expected
+    assert ex.outside == {0x03000004: Mode.ARM}
+
+
+def test_dma_control_built_with_orr_and_a_conditional_store():
+    # The start-up code shape of real games: count >> 2 | flags, stored if the count is not 0.
+    source = DMA_COPY.replace(
+        "    ldr r1, cnt\n    str r1, [r0, #0xdc]\n",
+        "    ldr r1, cnt\n    movs r1, r1, lsr #2\n    orr r1, r1, #0x84000000\n"
+        "    strne r1, [r0, #0xdc]\n",
+    ).replace("0x84000002", "8")
+    ex = explore_program(source)
+    assert ex.copies == [RamCopy(0x080000E0, 0x08000200, 0x03000000, 8)]
+
+
+def test_dma_registers_written_with_stmia():
+    source = """
+        ldr r0, regs
+        ldr r1, src
+        ldr r2, dst
+        ldr r3, cnt
+        stmia r0!, {r1, r2, r3}
+        bx lr
+    .align 2
+    regs: .word 0x040000d4
+    src: .word 0x08000200
+    dst: .word 0x02000000
+    cnt: .word 0x84000010
+    """
+    ex = explore_program(source, thumb=True)
+    assert ex.copies == [RamCopy(0x080000C8, 0x08000200, 0x02000000, 64)]
+
+
+@pytest.mark.parametrize(
+    "swi,control,size",
+    [
+        ("0xb", "0x04000010", 64),  # CpuSet, 16 words
+        ("0xb", "0x00000010", 32),  # CpuSet, 16 halfwords
+        ("0xc", "0x00000009", 64),  # CpuFastSet rounds up to 8-word blocks
+        ("0xb", "0x05000010", None),  # CpuSet fill
+    ],
+)
+def test_bios_copies_with_known_operands(swi, control, size):
+    source = f"""
+        ldr r0, src
+        ldr r1, dst
+        ldr r2, ctl
+        svc #{swi}
+        bx lr
+    .align 2
+    src: .word 0x08000200
+    dst: .word 0x02000000
+    ctl: .word {control}
+    """
+    ex = explore_program(source, thumb=True)
+    expected = [] if size is None else [RamCopy(0x080000C6, 0x08000200, 0x02000000, size)]
+    assert ex.copies == expected

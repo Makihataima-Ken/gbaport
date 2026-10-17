@@ -105,3 +105,13 @@ def test_call_forgets_caller_saved_registers():
     state.forget_call_clobbered()
     assert state.consts == {4: 2}
     assert state.popped == {5}
+
+
+def test_bitwise_operations_with_known_operands():
+    source = (
+        "mov r0, #0x1f\norr r1, r0, #0x84000000\nand r2, r1, #0xff\n"
+        "eor r3, r2, #1\nbic r4, r1, r0\nbx lr"
+    )
+    assert run_states(source, 5).consts == {
+        0: 0x1F, 1: 0x8400001F, 2: 0x1F, 3: 0x1E, 4: 0x84000000,
+    }

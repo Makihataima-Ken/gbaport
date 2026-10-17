@@ -4,7 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 from gbaport.analysis.cfg import Program, build_program
-from gbaport.analysis.config import ConfigError, GameConfig
+from gbaport.analysis.config import ConfigError, GameConfig, RamCode
 from gbaport.analysis.discover import Exploration, Issue, explore
 from gbaport.analysis.pointers import pointer_candidates
 from gbaport.analysis.space import CodeSpace
@@ -14,6 +14,7 @@ from gbaport.rom.image import HEADER_SIZE, ROM_BASE, RomImage
 from gbaport.rom.info import RomInfo, inspect_rom
 
 FORMAT = "gbaport-analysis/1"
+RAM_REGIONS = ((0x02000000, 0x02040000), (0x03000000, 0x03008000))  # EWRAM, IWRAM
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,8 @@ class Analysis:
     exploration: Exploration
     program: Program
     coverage: Coverage
+    ram_code: tuple[RamCode, ...] = ()  # every overlay used: configured, then detected
+    detected: tuple[RamCode, ...] = ()  # copies the analysis found and adopted itself
 
 
 def analyze_rom(
@@ -57,11 +60,38 @@ def analyze_rom(
     seeds += [(addr, Mode.ARM, "seed") for addr in config.entries]
     seeds += [(addr, Mode.THUMB, "seed") for addr in config.thumb_entries]
     seeds += [(blob.ram, blob.mode, "seed") for blob in config.ram_code]
-    candidates = pointer_candidates(space) if config.scan_pointers else []
     traced = targets_by_site(list(traces))
-    exploration = explore(space, seeds, config, traced=traced, candidates=candidates)
+    detected: tuple[RamCode, ...] = ()
+    while True:  # each round adopts copies that hold code the last round could not reach
+        space = CodeSpace(rom, config.ram_code + detected)
+        candidates = pointer_candidates(space) if config.scan_pointers else []
+        exploration = explore(space, seeds, config, traced=traced, candidates=candidates)
+        found = _copied_code(exploration, space, config.ram_code + detected)
+        if not found:
+            break
+        detected += found
     coverage = _coverage(space, exploration, config)
-    return Analysis(info, exploration, build_program(exploration), coverage)
+    program = build_program(exploration)
+    return Analysis(info, exploration, program, coverage, config.ram_code + detected, detected)
+
+
+def _copied_code(
+    ex: Exploration, space: CodeSpace, known: tuple[RamCode, ...]
+) -> tuple[RamCode, ...]:
+    """Copies from ROM into RAM that cover code the walk wanted to reach, as new overlays."""
+    found: list[RamCode] = []
+    for copy in sorted(ex.copies, key=lambda c: (c.site, c.dst)):
+        end = copy.dst + copy.size
+        wanted = sorted(addr for addr in ex.outside if copy.dst <= addr < end)
+        if not wanted or not any(lo <= copy.dst and end <= hi for lo, hi in RAM_REGIONS):
+            continue
+        blob = RamCode(space.canonical(copy.src), copy.dst, copy.size, ex.outside[wanted[0]])
+        try:
+            CodeSpace(space.rom, (*known, *found, blob))
+        except ConfigError:
+            continue  # not a ROM source, or overlapping an overlay already in use
+        found.append(blob)
+    return tuple(found)
 
 
 def sorted_issues(ex: Exploration) -> list[Issue]:
@@ -109,6 +139,16 @@ def analysis_to_dict(analysis: Analysis) -> dict:
             {"site": _hex(site), "targets": [_hex(t) for t in targets]}
             for site, targets in sorted(ex.traced.items())
         ],
+        "ram_code": [
+            {
+                "rom": _hex(blob.rom),
+                "ram": _hex(blob.ram),
+                "size": blob.size,
+                "mode": blob.mode.value,
+                "detected": blob in analysis.detected,
+            }
+            for blob in analysis.ram_code
+        ],
         "issues": [
             {"addr": _hex(i.addr), "kind": i.kind, "detail": i.detail} for i in sorted_issues(ex)
         ],
@@ -124,11 +164,13 @@ def analysis_to_dict(analysis: Analysis) -> dict:
 def summary_lines(analysis: Analysis) -> list[str]:
     ex, program, coverage = analysis.exploration, analysis.program, analysis.coverage
     veneers = sum(1 for f in program.functions.values() if f.kind == "veneer")
+    configured = len(analysis.ram_code) - len(analysis.detected)
     rows = [
         ("functions", f"{len(program.functions)} ({veneers} veneers)"),
         ("found by", _breakdown(f.kind for f in program.functions.values())),
         ("blocks", str(len(program.blocks))),
         ("jump tables", str(len(ex.tables))),
+        ("ram code", f"{configured} configured, {len(analysis.detected)} detected"),
         ("code", f"{coverage.code_bytes} bytes"),
         ("literals", f"{coverage.literal_bytes} bytes"),
         ("data", f"{coverage.data_bytes} bytes"),

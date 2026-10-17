@@ -2,7 +2,7 @@ import json
 
 import pytest
 from ksasm import assemble
-from progkit import CRT0, program_rom
+from progkit import CRT0, DMA_COPY, program_rom
 
 from gbaport.analysis.analyze import Coverage, analysis_to_dict, analyze_rom, summary_lines
 from gbaport.analysis.config import ConfigError, GameConfig, RamCode
@@ -109,3 +109,38 @@ def test_pointer_scan_finds_callbacks():
     assert analyze_rom(rom).program.functions[0x080000C8].kind == "pointer"
     without = analyze_rom(rom, GameConfig(scan_pointers=False))
     assert 0x080000C8 not in without.program.functions
+
+
+def copied_code_rom(source: str = DMA_COPY):
+    return program_rom(source, patches={0x200: assemble("bx lr\nbx lr", addr=0x03000000)})
+
+
+def test_copied_ram_code_is_detected():
+    analysis = analyze_rom(copied_code_rom())
+    blob = RamCode(0x08000200, 0x03000000, 8, Mode.ARM)
+    assert analysis.detected == (blob,)
+    assert analysis.ram_code == (blob,)
+    assert analysis.program.functions[0x03000004].kind == "jump"
+    assert analysis.exploration.issues == []
+    assert "ram code     0 configured, 1 detected" in summary_lines(analysis)
+    assert analysis_to_dict(analysis)["ram_code"] == [
+        {"rom": "0x08000200", "ram": "0x03000000", "size": 8, "mode": "arm", "detected": True}
+    ]
+
+
+def test_copies_without_wanted_code_are_not_adopted():
+    analysis = analyze_rom(copied_code_rom(DMA_COPY.replace("0x03000004", "0x03000100")))
+    assert analysis.detected == ()
+    assert [i.kind for i in analysis.exploration.issues] == ["outside_code"]
+
+
+def test_copies_from_ram_are_not_adopted():
+    analysis = analyze_rom(copied_code_rom(DMA_COPY.replace("0x08000200", "0x02000000")))
+    assert analysis.detected == ()
+
+
+def test_detected_copies_never_overlap_configured_ram_code():
+    configured = RamCode(0x08000300, 0x03000000, 4, Mode.ARM)  # overlaps the copy, not the target
+    analysis = analyze_rom(copied_code_rom(), GameConfig(ram_code=(configured,)))
+    assert analysis.detected == ()
+    assert analysis.ram_code == (configured,)
