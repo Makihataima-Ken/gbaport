@@ -50,7 +50,8 @@ def parse_header(rom: RomImage) -> RomHeader:
 
 
 def _ascii(raw: bytes) -> str:
-    return raw.rstrip(b"\0").decode("ascii", errors="replace")
+    # backslashreplace keeps stray bytes visible and printable on any console encoding
+    return raw.rstrip(b"\0").decode("ascii", errors="backslashreplace")
 
 
 def _entry_point(word: int) -> int | None:

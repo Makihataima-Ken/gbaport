@@ -13,6 +13,8 @@ def test_arm_text():
     assert format_instruction(decode_arm(0xE8BD80F0, BASE)) == "ldmia sp!, {r4, r5, r6, r7, pc}"
     assert format_instruction(decode_arm(0xEB00003E, BASE)) == "bl #0x8000100"
     assert format_instruction(decode_arm(0xE5310004, BASE)) == "ldr r0, [r1, #-4]!"
+    # W bit still shown when the loaded base makes the writeback ineffective
+    assert format_instruction(decode_arm(0xE8B00003, BASE)) == "ldmia r0!, {r0, r1}"
 
 
 def test_thumb_text():

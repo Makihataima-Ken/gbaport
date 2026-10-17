@@ -6,6 +6,7 @@ plain UAL forms would select 32-bit Thumb-2 encodings. Undefined words and
 unpaired Thumb BL halves have no assembler syntax and print as data directives.
 """
 
+from gbaport.isa.bits import bit
 from gbaport.isa.model import (
     COMPARE_OPS,
     DATA_PROCESSING_OPS,
@@ -106,7 +107,8 @@ def _arm(ins: Instruction) -> str:
         return f"{op.value}{t}{c} {_reg(ins.rd)}, {_address(ins)}"
     if op in (Op.LDM, Op.STM):
         mode = _BLOCK_MODES[(ins.pre, ins.up)]
-        writeback = "!" if ins.writeback else ""
+        # From the encoding: ``ins.writeback`` is False when an LDM reloads its base.
+        writeback = "!" if bit(ins.raw, 21) else ""
         caret = "^" if ins.user else ""
         return f"{op.value}{mode}{c} {_reg(ins.rn)}{writeback}, {_reglist(ins.reglist)}{caret}"
     if op in (Op.B, Op.BL):

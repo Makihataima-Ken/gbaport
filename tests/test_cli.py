@@ -1,4 +1,6 @@
+import io
 import json
+import sys
 
 import pytest
 from romkit import build_rom
@@ -58,3 +60,11 @@ def test_info_rejects_non_rom(tmp_path, capsys):
     path.write_bytes(bytes(0x400))
     assert main(["info", str(path)]) == 1
     assert "not a GBA ROM" in capsys.readouterr().err
+
+
+def test_info_text_survives_non_ascii_title_on_legacy_console(tmp_path, monkeypatch):
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    monkeypatch.setattr(sys, "stdout", stream)
+    assert main(["info", str(write_rom(tmp_path, title=b"POK\xe9MON"))]) == 0
+    stream.flush()
+    assert b"POK\\xe9MON" in stream.buffer.getvalue()

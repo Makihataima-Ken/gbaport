@@ -59,6 +59,11 @@ CASES = [
      dict(op=Op.STM, rn=13, pre=True, up=False, writeback=True, reglist=(4, 14))),
     ("ldm r0, {r1, r2}^", 0xE8D00006,
      dict(op=Op.LDM, user=True, writeback=False, reglist=(1, 2))),
+    # ARMv4: when LDM loads its own base, the loaded value wins over writeback
+    ("ldmia r0!, {r0, r1}", 0xE8B00003,
+     dict(op=Op.LDM, rn=0, writeback=False, reglist=(0, 1))),
+    ("stmia r0!, {r0, r1}", 0xE8A00003,
+     dict(op=Op.STM, rn=0, writeback=True, reglist=(0, 1))),
 ]
 
 

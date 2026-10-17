@@ -178,13 +178,16 @@ def _halfword_transfer(word: int, base: dict) -> Instruction:
 
 
 def _block_transfer(word: int, base: dict) -> Instruction:
+    load, rn = bit(word, 20), field(word, 19, 16)
+    reglist = tuple(r for r in range(16) if bit(word, r))
     return Instruction(
         **base,
-        op=Op.LDM if bit(word, 20) else Op.STM,
-        rn=field(word, 19, 16),
+        op=Op.LDM if load else Op.STM,
+        rn=rn,
         pre=bit(word, 24),
         up=bit(word, 23),
         user=bit(word, 22),
-        writeback=bit(word, 21),
-        reglist=tuple(r for r in range(16) if bit(word, r)),
+        # ARMv4: an LDM that loads its own base keeps the loaded value, not the writeback.
+        writeback=bit(word, 21) and not (load and rn in reglist),
+        reglist=reglist,
     )

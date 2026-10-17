@@ -71,3 +71,8 @@ def test_load_reads_file(tmp_path):
 
 def test_repr_does_not_dump_rom_bytes():
     assert len(repr(RomImage(build_rom()))) < 100
+
+
+def test_non_ascii_header_bytes_are_escaped():
+    rom = RomImage(build_rom(title=b"POK\xe9MON"))
+    assert parse_header(rom).title == "POK\\xe9MON"

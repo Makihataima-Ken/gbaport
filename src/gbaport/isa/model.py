@@ -13,7 +13,10 @@ lifting handle one semantic model. Field meanings per operation:
   applies it before the access, ``writeback`` updates the base (always true
   when post-indexed), ``user`` marks LDRT/STRT.
 - Block transfer: ``rn``, ``reglist``, ``pre``/``up``/``writeback``; ``user``
-  is the ``^`` (S) bit.
+  is the ``^`` (S) bit. ``writeback`` means the base really ends up updated:
+  it is False for an LDM whose ``reglist`` contains ``rn`` even when the W bit
+  is set, because on ARMv4 the loaded value overwrites the written-back base
+  (same rule in ARM and Thumb).
 - SWP/SWPB: rd <- [rn], then [rn] <- rm.
 - B/BL: absolute ``target``.  BX: ``rm``.  SWI: ``imm`` is the comment field.
 - MRS: ``rd``, ``spsr``.  MSR: ``spsr``, ``psr_mask`` (bit0 c, bit1 x, bit2 s,
