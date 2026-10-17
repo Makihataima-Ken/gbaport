@@ -8,12 +8,14 @@ from pathlib import Path
 from gbaport import __version__
 from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issues, summary_lines
 from gbaport.analysis.config import GameConfig, default_config_path, load_config
-from gbaport.analysis.traces import default_trace_paths, load_trace
+from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save_trace
 from gbaport.disasm import disassemble, format_line
 from gbaport.isa.model import Mode
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
+from gbaport.tracing.gdb import GdbClient, SocketTransport
+from gbaport.tracing.session import TraceSession
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -25,6 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_info_command(commands)
     _add_disasm_command(commands)
     _add_analyze_command(commands)
+    _add_trace_command(commands)
     return parser
 
 
@@ -104,6 +107,66 @@ def _run_analyze(args: argparse.Namespace) -> int:
         document = json.dumps(analysis_to_dict(analysis), indent=1)
         Path(args.out).write_text(document, encoding="utf-8")
         print(f"wrote {args.out}")
+    return 0
+
+
+def _add_trace_command(commands) -> None:
+    trace = commands.add_parser(
+        "trace", help="record indirect branch targets from a game running in mGBA"
+    )
+    trace.add_argument("rom", help="path to the .gba file loaded in mGBA")
+    trace.add_argument(
+        "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
+    )
+    trace.add_argument(
+        "--out", help="trace file to extend (default: games/<game_code>/traces/mgba.trace)"
+    )
+    trace.add_argument(
+        "--trace",
+        action="append",
+        default=[],
+        help="other trace files to import (games/<game_code>/traces/*.trace are read too)",
+    )
+    trace.add_argument("--host", default="127.0.0.1", help="GDB server host (default 127.0.0.1)")
+    trace.add_argument("--port", type=int, default=2345, help="GDB server port (default 2345)")
+    trace.add_argument("--seconds", type=float, help="stop after this long (default: Ctrl+C)")
+    trace.add_argument(
+        "--reanalyze-every",
+        type=float,
+        default=5.0,
+        help="seconds between re-analyses that move breakpoints to new code (default 5)",
+    )
+    trace.set_defaults(handler=_run_trace)
+
+
+def _run_trace(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    game_code = parse_header(rom).game_code
+    config_path = args.config or default_config_path(game_code)
+    config = load_config(config_path) if config_path else GameConfig()
+    out = Path(args.out) if args.out else Path("games") / game_code / "traces" / "mgba.trace"
+    recorded = load_trace(out) if out.exists() else Trace(inspect_rom(rom).sha1)
+    others = [*default_trace_paths(game_code), *map(Path, args.trace)]
+    fixed = tuple(load_trace(path) for path in others if path.resolve() != out.resolve())
+
+    def analyze(trace: Trace):
+        return analyze_rom(rom, config, (*fixed, trace)).exploration
+
+    client = GdbClient(SocketTransport.connect(args.host, args.port))
+    print(f"connected to {args.host}:{args.port}; play the game, press Ctrl+C to stop")
+    session = TraceSession(
+        client,
+        analyze,
+        recorded,
+        save=lambda trace: save_trace(trace, out),
+        report=print,
+        reanalyze_every=args.reanalyze_every,
+    )
+    try:
+        session.run(args.seconds)
+    finally:
+        client.close()
+    print(f"wrote {out} ({len(recorded.hits)} hits)")
     return 0
 
 

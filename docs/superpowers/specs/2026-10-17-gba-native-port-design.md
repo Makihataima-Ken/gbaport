@@ -133,6 +133,7 @@ entries = [0x08000204, 0x080A1C30]          # extra function entry points
 thumb_entries = [0x08012345]
 data = [[0x08100000, 0x08180000]]           # ranges that are never code
 jump_tables = [{ at = 0x0801F00C, table = 0x0801F010, count = 12 }]  # at = the dispatch instruction
+scan_pointers = true           # guess entries from ROM words pointing at function starts
 
 [[ram_code]]                   # blobs copied from ROM to RAM and executed there
 rom = 0x080F0000
@@ -143,6 +144,10 @@ mode = "arm"
 [timing]
 model = "block"                # "block" (default) or "frame"
 ```
+
+Traces recorded with `gbaport trace` live next to it in `games/<game_code>/traces/*.trace`
+(addresses only) and are read automatically. Code the game copies into RAM with DMA or
+CpuSet is detected and needs a `[[ram_code]]` entry only when detection misses it.
 
 ## Verification strategy
 
@@ -163,7 +168,8 @@ depends on what the earlier stages reveal.
 | Plan | Deliverable | Acceptance | Depends on |
 |---|---|---|---|
 | P1 Foundation | Repo, ROM ingest, ARMv4T ARM+Thumb decoders, formatter, `gbaport info` / `gbaport disasm` | Keystone round-trip corpus passes; decoders total over all Thumb halfwords and 200k random ARM words; CLI works on a real dump | — |
-| P2 Code discovery | `gbaport analyze` → `analysis.json` (functions, blocks, modes, jump tables, literal pools, RAM-copied code); `game.toml` loader; trace import | Synthetic programs give exact expected CFGs; coverage report on a real dump | P1 |
+| P2 Code discovery | `gbaport analyze` → `analysis.json` (functions, blocks, modes, jump tables, literal pools, RAM-copied code); `game.toml` loader | Synthetic programs give exact expected CFGs; coverage report on a real dump | P1 |
+| P2b Discovery coverage | Pointer scan, RAM-copy detection, trace files and their import, `gbaport trace` through mGBA's GDB server | Synthetic programs and a fake GDB server give exact results; dump coverage report before and after | P2 |
 | P3 Lifter | `gbaport recompile` → C per function + dispatch table; instruction semantics incl. flags, shifter carry, conditional execution, PC-relative rules | Unicorn differential tests for every ARMv4T operation; snippet programs match end state | P2 |
 | P4 Runtime core + desktop host | C runtime (memory map, I/O, BIOS HLE, DMA, timers, scheduler/IRQ, saves) + SDL3 desktop window | Self-built test ROMs run natively with expected results; CPU test ROMs pass when recompiled | P3 |
 | P5 Renderer | Scanline renderer, all modes/features, per-line latching | Reference-image tests on graphics test ROMs | P4 |
@@ -187,6 +193,7 @@ Needed later:
 - Android SDK + NDK r27 or newer (Android Studio or `sdkmanager`) — Plan 8.
 - macOS with Xcode 16 or newer, or a macOS CI runner, plus an Apple developer account — Plan 9.
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
+- mGBA 0.10 or newer with its GDB server, dev machine only (`gbaport trace`) — Plan 2b.
 
 ## Risks
 
