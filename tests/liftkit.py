@@ -3,10 +3,9 @@
 A case is a snippet of assembly plus an initial state. The kit appends
 ``stop: svc`` with BIOS number 0xFF (``b .`` after it keeps the analysis short);
 both runs end there, and snippets may branch to ``stop`` themselves.
-``run_compiled`` builds one test binary from a C translation unit that defines the
-case table (cached by the hash of its sources) and runs the cases with it;
-``run_oracle`` executes the same cases in Unicorn's ARM926 model. Both report an
-``Outcome``.
+``run_lifted`` analyses and lifts every case, builds one test binary for the whole
+batch (cached by the hash of its sources) and runs it; ``run_oracle`` executes the
+same cases in Unicorn's ARM926 model. Both report an ``Outcome``.
 
 Memory is three 4 KiB windows: the ROM at 0x08000000 (the assembled snippet), EWRAM
 at 0x02000000 and IWRAM at 0x03000000. Unicorn is an ARMv5 core, so tests stay
@@ -31,6 +30,13 @@ from unicorn import UC_ARCH_ARM, UC_MODE_ARM, UC_MODE_THUMB, Uc, UcError
 from unicorn import arm_const as uc_arm
 
 import gbaport.lift
+from gbaport.analysis.cfg import build_program
+from gbaport.analysis.discover import explore
+from gbaport.analysis.space import CodeSpace
+from gbaport.isa.model import Mode
+from gbaport.lift.function import function_name
+from gbaport.lift.program import lift_program
+from gbaport.rom.image import RomImage
 
 WINDOW = 0x1000
 ROM, EWRAM, IWRAM = 0x08000000, 0x02000000, 0x03000000
@@ -116,6 +122,24 @@ def clang() -> str:
     return found
 
 
+def lift_cases(cases: list[Case]) -> str:
+    """One C translation unit with every case's program and the harness case table."""
+    parts = ['#include "lifthost.h"\n']
+    entries = []
+    for i, case in enumerate(cases):
+        space = CodeSpace(RomImage(case.rom()))
+        mode = Mode.THUMB if case.thumb else Mode.ARM
+        ex = explore(space, [(CODE_ADDR, mode, "seed")])
+        lifted = lift_program(build_program(ex), ex, prefix=f"c{i}_")
+        parts += [lifted.prototypes, *lifted.functions.values(), lifted.dispatch]
+        entries.append((function_name(CODE_ADDR, lifted.prefix), lifted.lookup_name))
+    parts.append("const HarnessCase HARNESS_CASES[] = {")
+    parts += [f"    {{{entry}, {lookup}}}," for entry, lookup in entries]
+    parts.append("};")
+    parts.append(f"const unsigned HARNESS_CASE_COUNT = {len(cases)};")
+    return "\n".join(parts) + "\n"
+
+
 def build(source: str) -> Path:
     """Compile the harness with ``source``; reuses an earlier build of the same sources."""
     digest = hashlib.sha1()
@@ -160,6 +184,10 @@ def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:
             Outcome(STATUSES[words[0]], words[1:16], words[16], ram[:WINDOW], ram[WINDOW:])
         )
     return outcomes
+
+
+def run_lifted(cases: list[Case]) -> list[Outcome]:
+    return run_compiled(lift_cases(cases), cases)
 
 
 def run_oracle(cases: list[Case]) -> list[Outcome]:
@@ -217,3 +245,15 @@ def differences(lifted: Outcome, oracle: Outcome, *, ignore_cv: bool = False) ->
             first = next(i for i in range(WINDOW) if a[i] != b[i])
             found.append(f"{name} differs from +{first:#x}")
     return found
+
+
+def assert_same(cases: list[Case], *, ignore_cv: bool = False) -> None:
+    """Run ``cases`` both ways and fail with the first few mismatches."""
+    failures = []
+    for case, lifted, oracle in zip(cases, run_lifted(cases), run_oracle(cases)):
+        diff = differences(lifted, oracle, ignore_cv=ignore_cv)
+        if diff:
+            failures.append(f"{case.source.strip()!r} (thumb={case.thumb}): {'; '.join(diff)}")
+    assert not failures, f"{len(failures)} of {len(cases)} cases differ:\n" + "\n".join(
+        failures[:10]
+    )
