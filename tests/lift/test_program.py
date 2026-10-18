@@ -1,4 +1,4 @@
-from progkit import program_space
+from progkit import CRT0, program_space
 
 from gbaport.analysis.cfg import build_program
 from gbaport.analysis.discover import explore
@@ -47,3 +47,14 @@ def test_program_files_split_the_code():
     code = [text for name, text in files.items() if name.endswith(".c")]
     assert all(text.startswith('#include "gba_program.h"') for text in code)
     assert single_source(program).startswith('#include "gba_cpu.h"')
+
+
+def test_an_instruction_c_cannot_express_is_reported():
+    program = lifted(".word 0xe8bd0000\nbx lr")  # ldmia sp!, {} (empty register list)
+    assert program.problems == ("0x080000c0: LDM/STM with an empty register list",)
+    assert "gba_undefined(ctx, 0x080000c0u);" in program.functions[0x080000C0]
+
+
+def test_calls_to_recompiled_functions_are_direct():
+    code = lifted(CRT0).functions[0x080000E8]  # Thumb main calls helper with bl
+    assert "gba_call(ctx, f_080000f6(ctx), 0x080000efu);" in code

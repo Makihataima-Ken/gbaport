@@ -22,6 +22,7 @@ class LiftedProgram:
     prototypes: str  # a declaration for every function
     functions: dict[int, str]  # entry address -> C definition
     dispatch: str  # the sorted table and the lookup function
+    problems: tuple[str, ...] = ()  # instructions lifted as undefined because C cannot express them
 
     @property
     def lookup_name(self) -> str:
@@ -32,8 +33,12 @@ def lift_program(program: Program, ex: Exploration, prefix: str = "") -> LiftedP
     entries = sorted(program.functions)
     prototypes = "".join(f"uint32_t {function_name(a, prefix)}(GbaCtx *ctx);\n" for a in entries)
     prototypes += f"GbaFn {prefix}gba_lookup(GbaCtx *ctx, uint32_t addr);\n"
-    functions = {a: lift_function(program.functions[a], program, ex, prefix) for a in entries}
-    return LiftedProgram(prefix, prototypes, functions, _dispatch(entries, prefix))
+    problems: list[str] = []
+    functions = {
+        a: lift_function(program.functions[a], program, ex, prefix, problems) for a in entries
+    }
+    unique = tuple(dict.fromkeys(problems))  # a block shared by several functions reports once
+    return LiftedProgram(prefix, prototypes, functions, _dispatch(entries, prefix), unique)
 
 
 def single_source(lifted: LiftedProgram) -> str:

@@ -55,7 +55,7 @@ def classify(
     if _is_return(ins, state):
         return Flow(FlowKind.RETURN, falls_through=conditional)
     target = _pc_target(ins, state, space)
-    if _links_to_next(prev):
+    if links_to_next(prev):
         return Flow(FlowKind.CALL, target, falls_through=True)
     if target is None:
         return Flow(FlowKind.INDIRECT, falls_through=conditional)
@@ -94,7 +94,7 @@ def _pc_target(ins: Instruction, state: RegState, space: CodeSpace) -> tuple[int
     return value & (~1 if ins.mode is Mode.THUMB else ~3), ins.mode
 
 
-def _links_to_next(prev: Instruction | None) -> bool:
+def links_to_next(prev: Instruction | None) -> bool:
     """``mov lr, pc`` just before a jump turns that jump into a call."""
     return (
         prev is not None

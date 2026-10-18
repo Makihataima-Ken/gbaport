@@ -71,6 +71,10 @@ def lift_effects(ins: Instruction) -> list[str]:
     if op is Op.SWI:
         number = ins.imm >> 16 if ins.mode is Mode.ARM else ins.imm
         return [f"gba_swi(ctx, 0x{number:02x}u);"]
+    if op is Op.BX:
+        return [f"t = {read(ins, ins.rm)};"]
+    if op is Op.BL_HI:
+        return [f"ctx->r[14] = {hexu(pc_value(ins) + ins.imm)};"]
     raise LiftError(f"{ins.addr:#010x}: no effects for {op.value}")
 
 
