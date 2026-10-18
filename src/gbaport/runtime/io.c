@@ -4,7 +4,9 @@
  * - DISPSTAT's status bits and VCOUNT belong to the scheduler; writes cannot change them.
  * - KEYINPUT comes from the host.
  * - IF clears the bits written as 1.
- * - DMA source, destination and count registers are write-only: they read as 0. */
+ * - DMA source, destination and count registers are write-only: they read as 0.
+ * - Writing IE, IF or IME can make an interrupt deliverable.
+ * - Writing HALTCNT halts or stops the CPU. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -57,18 +59,26 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
         return;  /* read-only */
     case GBA_REG_IE:
         IO(rt, offset) = merged & 0x3FFF;
+        gba_irq_changed(rt);
         return;
     case GBA_REG_IF:
         IO(rt, offset) = (uint16_t)(old & ~(value & mask));  /* writing 1 acknowledges */
+        gba_irq_changed(rt);
         return;
     case GBA_REG_IME:
         IO(rt, offset) = merged & 1;
+        gba_irq_changed(rt);
         return;
     case GBA_REG_WAITCNT:
         IO(rt, offset) = merged & 0x7FFF;  /* bit 15 reads 0: a GBA cartridge */
         return;
     case GBA_REG_POSTFLG:  /* POSTFLG in the low byte, HALTCNT (write-only) in the high one */
         IO(rt, offset) = merged & 0x0001;
+        if (mask & 0xFF00) {
+            if (value & 0x8000)
+                gba_end(rt, GBA_END_STOPPED);  /* Stop: nothing wakes a headless run */
+            gba_halt(rt);
+        }
         return;
     default:
         IO(rt, offset) = merged;

@@ -1,15 +1,16 @@
 /* bios.c - the BIOS calls (SWI), reimplemented in C.
  *
- * This file has the resets and Stop so far. The other BIOS functions (0x02 and 0x04-0x2A:
- * Halt, the interrupt waits, arithmetic, copies, decompression, ...) are not implemented
- * yet and end the run with an error that names them. Numbers above 0x2A do not exist in
- * the BIOS; the first one is reported and they are ignored. */
+ * This file has the calls that control the CPU: resets, Halt, Stop and the interrupt
+ * waits. The other BIOS functions (0x06-0x2A: arithmetic, copies, decompression, ...)
+ * are not implemented yet and end the run with an error that names them. Numbers above
+ * 0x2A do not exist in the BIOS; the first one is reported and they are ignored. */
 #include <stdio.h>
 #include <string.h>
 
 #include "gba_runtime.h"
 
 #define IO(rt, offset) ((rt)->io[(offset) >> 1])
+#define BIOS_IF 0x03007FF8u  /* the flags a game's IRQ handler sets for IntrWait */
 
 /* RegisterRamReset: r0 selects what to clear. Bit 1 keeps the top 0x200 bytes of IWRAM;
  * bit 7 resets the I/O registers other than serial and sound. */
@@ -46,6 +47,26 @@ static void register_ram_reset(GbaRuntime *rt, uint32_t flags)
     }
 }
 
+/* IntrWait: wait until the IRQ handler has set one of `flags` in BIOS_IF, then clear it.
+ * With `discard`, flags that were already set do not count. The BIOS turns IME on. */
+static void intr_wait(GbaRuntime *rt, uint32_t discard, uint32_t flags)
+{
+    GbaCtx *ctx = &rt->cpu;
+    IO(rt, GBA_REG_IME) = 1;
+    if (ctx->cpsr_ctrl & 0x80)
+        gba_fail(rt, "IntrWait was called with interrupts disabled in the CPSR; it would never return");
+    if (discard)
+        gba_write16(ctx, BIOS_IF, gba_read16(ctx, BIOS_IF) & ~flags);
+    for (;;) {
+        uint32_t set = gba_read16(ctx, BIOS_IF);
+        if (set & flags) {
+            gba_write16(ctx, BIOS_IF, set & ~flags);
+            return;
+        }
+        gba_halt(rt);
+    }
+}
+
 void gba_swi(GbaCtx *ctx, uint32_t number)
 {
     GbaRuntime *rt = gba_rt(ctx);
@@ -53,7 +74,13 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
     switch (number) {
     case 0x00: gba_reset(rt); break;
     case 0x01: register_ram_reset(rt, ctx->r[0]); break;
+    case 0x02: gba_halt(rt); break;
     case 0x03: gba_end(rt, GBA_END_STOPPED); break;  /* nothing can wake a headless run */
+    case 0x04: intr_wait(rt, ctx->r[0], ctx->r[1]); break;
+    case 0x05:
+        ctx->r[0] = ctx->r[1] = 1;
+        intr_wait(rt, 1, GBA_IRQ_VBLANK);
+        break;
     default:
         if (number <= 0x2A)
             gba_fail(rt, "BIOS function 0x%02x is not implemented yet", (unsigned)number);
