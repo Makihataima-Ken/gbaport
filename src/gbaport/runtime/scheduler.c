@@ -108,8 +108,10 @@ static void advance(GbaRuntime *rt)
             break;
         if (which == GBA_EVENT_HBLANK)
             hblank(rt);
-        else
+        else if (which == GBA_EVENT_LINE)
             line_end(rt, when);
+        else
+            gba_timer_overflow(rt, which - GBA_EVENT_TIMER0, when);
     }
     gba_reschedule(rt);
 }

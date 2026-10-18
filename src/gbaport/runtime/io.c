@@ -6,7 +6,8 @@
  * - IF clears the bits written as 1.
  * - DMA source, destination and count registers are write-only: they read as 0.
  * - Writing IE, IF or IME can make an interrupt deliverable.
- * - Writing HALTCNT halts or stops the CPU. */
+ * - Writing HALTCNT halts or stops the CPU.
+ * - Timer counters are worked out from the cycle count; writes set the reload value. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -38,6 +39,8 @@ uint16_t gba_io_read(GbaRuntime *rt, uint32_t offset)
 {
     if (offset >= GBA_REG_DMA0SAD && offset <= GBA_REG_DMA3CNT_H && dma_channel(offset) < 0)
         return 0;  /* source, destination and count are write-only */
+    if (offset >= GBA_REG_TM0CNT_L && offset <= GBA_REG_TM3CNT_H && !(offset & 2))
+        return gba_timer_counter(rt, (int)(offset - GBA_REG_TM0CNT_L) / 4);
     if (offset == GBA_REG_KEYINPUT)
         return (uint16_t)(0x3FF & ~rt->keys_pressed);
     return IO(rt, offset);
@@ -47,6 +50,14 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
 {
     uint16_t old = IO(rt, offset);
     uint16_t merged = (uint16_t)((old & ~mask) | (value & mask));
+    if (offset >= GBA_REG_TM0CNT_L && offset <= GBA_REG_TM3CNT_H) {
+        int n = (int)(offset - GBA_REG_TM0CNT_L) / 4;
+        if (offset & 2)
+            gba_timer_write(rt, n, merged);
+        else
+            rt->timer[n].reload = merged;  /* used at the next start or overflow */
+        return;
+    }
     switch (offset) {
     case GBA_REG_DISPSTAT: {
         uint16_t stat = (uint16_t)((old & 0x0007) | (merged & 0xFF38));
