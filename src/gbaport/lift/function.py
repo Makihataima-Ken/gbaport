@@ -12,7 +12,14 @@ from gbaport.analysis.cfg import Function, Program
 from gbaport.analysis.discover import Exploration
 from gbaport.analysis.flow import links_to_next, writes_pc
 from gbaport.isa.model import Cond, Instruction, Mode, Op
-from gbaport.lift.semantics import CONDITIONS, LiftError, cycles, hexu, lift_effects
+from gbaport.lift.semantics import (
+    CONDITIONS,
+    LiftError,
+    cycles,
+    hexu,
+    lift_effects,
+    restores_cpsr,
+)
 
 
 def function_name(addr: int, prefix: str = "") -> str:
@@ -104,12 +111,17 @@ class _FunctionLifter:
         op = ins.op
         if op is Op.UNDEFINED:
             return [f"gba_undefined(ctx, {hexu(ins.addr)});", f"GBA_EXIT({hexu(ins.addr)});"], True
+        after = ins.addr + ins.size
         if op is Op.B:
+            if ins.target == after:  # a branch to the next instruction does nothing
+                return [], False
             return [self._go(ins.target)], True
         if op is Op.BL:
             ret = self._return_address(ins)
-            callee = self._direct(ins.target)
-            return [f"ctx->r[14] = {hexu(ret)};", f"gba_call(ctx, {callee}, {hexu(ret)});"], False
+            set_lr = f"ctx->r[14] = {hexu(ret)};"
+            if ins.target == after:  # only sets LR (a weak call, or reading the pc)
+                return [set_lr], False
+            return [set_lr, self._call(ins.target, ret)], False
         if op is Op.BL_LO:
             ret = self._return_address(ins)
             return [
@@ -133,11 +145,11 @@ class _FunctionLifter:
         after = ins.addr + ins.size
         return after | 1 if ins.mode is Mode.THUMB else after
 
-    def _direct(self, target: int) -> str:
-        """The callee expression for gba_call: a direct C call when it was recompiled."""
+    def _call(self, target: int, ret: int) -> str:
+        """A call to a constant target: direct when that function was recompiled."""
         if target in self.program.functions:
-            return f"{function_name(target, self.prefix)}(ctx)"
-        return hexu(target)
+            return f"gba_call_direct(ctx, {function_name(target, self.prefix)}, {hexu(ret)});"
+        return f"gba_call(ctx, {hexu(target)}, {hexu(ret)});"
 
     def _go(self, target: int) -> str:
         if target in self.blocks:
@@ -147,6 +159,8 @@ class _FunctionLifter:
     def _mask(self, ins: Instruction) -> list[str]:
         if ins.op is Op.BX:
             return []  # bit 0 selects the state; the lookup ignores it
+        if restores_cpsr(ins):  # the restored T bit decides the alignment
+            return ["t &= (ctx->cpsr_ctrl & 0x20u) ? ~1u : ~3u;"]
         return ["t &= ~3u;" if ins.mode is Mode.ARM else "t &= ~1u;"]
 
     def _switch(self, ins: Instruction) -> list[str]:

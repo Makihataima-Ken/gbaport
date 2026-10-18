@@ -103,6 +103,9 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
   made it; tail calls and jumps through registers return their target and never grow the C
   stack. Comparing against the call site's return address, rather than the LR a function was
   entered with, also handles code that sets LR itself before jumping (`ldr lr, =main; b init`).
+  Calls that never come back (`bl` used as a jump inside a loop) would nest C calls without
+  end, so nesting deeper than `GBA_MAX_CALL_DEPTH` (1024) aborts through the runtime's
+  `gba_call_overflow` with the return address.
 - **Memory.** Region page table (`addr >> 24`) with fast paths for EWRAM, IWRAM, VRAM, OAM,
   palette and ROM; I/O-register writes call handlers (DMA start, timer reload, IRQ ack).
 - **Timing.** Not cycle-accurate. Each generated basic block adds a compile-time cycle

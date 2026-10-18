@@ -4,7 +4,9 @@
  * entry and return the guest address execution continues at (a return address, a
  * tail-call target, or any other jump target). gba_call() runs such a chain until
  * it reaches the return address of the call that started it, so returns end C
- * calls while tail calls and jumps never grow the C stack.
+ * calls while tail calls and jumps never grow the C stack. Code that calls without
+ * ever returning (bl used as a jump in a loop) would still nest C calls forever, so
+ * nesting deeper than GBA_MAX_CALL_DEPTH goes to the runtime's gba_call_overflow.
  *
  * The runtime provides the memory accessors (aligned addresses only; the CPU-level
  * helpers below apply the ARM7TDMI rules for misaligned loads and stores), the BIOS
@@ -33,6 +35,7 @@ typedef struct GbaCtx {
     uint32_t bank_spsr[6];
     uint64_t cycles;            /* estimated CPU cycles run so far */
     uint64_t next_event;        /* gba_events() runs once cycles reach this */
+    uint32_t call_depth;        /* gba_call chains currently running */
     GbaFn (*lookup)(struct GbaCtx *ctx, uint32_t addr); /* recompiled function at addr */
     void *runtime;              /* owned by the runtime */
 } GbaCtx;
@@ -48,13 +51,32 @@ void gba_swi(GbaCtx *ctx, uint32_t number);
 void gba_undefined(GbaCtx *ctx, uint32_t addr);
 void gba_events(GbaCtx *ctx);
 GbaFn gba_missing(GbaCtx *ctx, uint32_t addr); /* no function recompiled at addr */
+void gba_call_overflow(GbaCtx *ctx, uint32_t ret); /* calls nested too deep; never returns */
 
 /* ---- control flow ---------------------------------------------------------- */
 
+#ifndef GBA_MAX_CALL_DEPTH
+#define GBA_MAX_CALL_DEPTH 1024u
+#endif
+
+/* Runs the chain that starts at guest address next until it comes back to ret. */
 static inline void gba_call(GbaCtx *ctx, uint32_t next, uint32_t ret)
 {
+    if (++ctx->call_depth > GBA_MAX_CALL_DEPTH)
+        gba_call_overflow(ctx, ret);
     while ((next ^ ret) & ~1u)
         next = ctx->lookup(ctx, next)(ctx);
+    ctx->call_depth--;
+}
+
+/* The same for a call to a recompiled function, which needs no lookup to start. */
+static inline void gba_call_direct(GbaCtx *ctx, GbaFn fn, uint32_t ret)
+{
+    if (++ctx->call_depth > GBA_MAX_CALL_DEPTH)
+        gba_call_overflow(ctx, ret);
+    uint32_t next = fn(ctx);
+    ctx->call_depth--;
+    gba_call(ctx, next, ret);
 }
 
 #define GBA_EXIT(target) do { \

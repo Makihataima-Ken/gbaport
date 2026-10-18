@@ -82,6 +82,9 @@ void gba_undefined(GbaCtx *ctx, uint32_t addr) { (void)ctx; (void)addr; longjmp(
 
 GbaFn gba_missing(GbaCtx *ctx, uint32_t addr) { (void)ctx; (void)addr; longjmp(escape, MISSING); }
 
+/* Calls nested this deep come from code that calls without returning: a runaway. */
+void gba_call_overflow(GbaCtx *ctx, uint32_t ret) { (void)ctx; (void)ret; longjmp(escape, RUNAWAY); }
+
 void gba_events(GbaCtx *ctx)
 {
     if (ctx->cycles >= CYCLE_LIMIT)
@@ -149,7 +152,7 @@ int main(int argc, char **argv)
         uint32_t initial_lr = ctx.r[14];
         int status = setjmp(escape);
         if (status == 0) {
-            gba_call(&ctx, HARNESS_CASES[index].entry(&ctx), initial_lr);
+            gba_call_direct(&ctx, HARNESS_CASES[index].entry, initial_lr);
             status = RETURNED;
         }
         write_u32(out, (uint32_t)(status - STOPPED));

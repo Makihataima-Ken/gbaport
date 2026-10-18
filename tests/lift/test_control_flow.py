@@ -262,3 +262,94 @@ def test_an_endless_loop_hands_control_to_the_scheduler():
 ])
 def test_unrecoverable_paths_reach_the_runtime(source, status):
     assert run_lifted([random_case(random.Random(23), source)])[0].status == status
+
+
+# A branch to the very next instruction does nothing, taken or not.
+NEXT_BRANCH = """
+    mov r0, #1
+    b next
+next:
+    add r0, r0, #2
+    tst r1, #1
+    beq after
+after:
+    add r0, r0, #4
+"""
+
+THUMB_NEXT_BRANCH = """
+    movs r0, #1
+    b next
+next:
+    adds r0, #2
+    lsls r2, r1, #31
+    beq after
+after:
+    adds r0, #4
+"""
+
+# A bl to the next instruction (how GNU ld resolves a call to an undefined weak symbol)
+# only sets LR; the function still returns to its own caller.
+NEXT_CALL = """
+    mov r0, #1
+    bl f
+    add r0, r0, #8
+    b stop
+f:
+    push {lr}
+    .word 0xebffffff
+    add r0, r0, #2
+    pop {pc}
+"""
+
+THUMB_NEXT_CALL = """
+    movs r0, #1
+    bl f
+    adds r0, #8
+    b stop
+f:
+    push {lr}
+    .hword 0xf000
+    .hword 0xf800
+    adds r0, #2
+    pop {pc}
+"""
+
+
+@pytest.mark.parametrize("source,thumb", [
+    (NEXT_BRANCH, False), (THUMB_NEXT_BRANCH, True), (NEXT_CALL, False), (THUMB_NEXT_CALL, True),
+])
+def test_branches_and_calls_to_the_next_instruction_fall_through(source, thumb):
+    rng = random.Random(26)
+    cases = []
+    for _ in range(8):
+        case = random_case(rng, source, thumb=thumb)
+        case.regs[13] = IWRAM + 0xC00  # a stack for the calls
+        cases.append(case)
+    assert_same(cases)
+
+
+# IRQ mode returns to Thumb code at a halfword address in system mode, as the BIOS's
+# subs pc, lr, #4 does: the restored T bit decides how the target is aligned.
+EXCEPTION_RETURN_SETUP = "mov r3, lr\nmsr cpsr_c, #0xd2\nmov r2, #0x3f\nmsr spsr_fc, r2\n"
+
+
+@pytest.mark.parametrize("source", [
+    EXCEPTION_RETURN_SETUP + "mov lr, r3\nmovs pc, lr",
+    EXCEPTION_RETURN_SETUP + (
+        "mov sp, #0x03000000\nadd sp, sp, #0x400\nadd r3, r3, #1\n"
+        "str r3, [sp, #-4]!\nldmfd sp!, {pc}^"
+    ),
+])
+def test_an_exception_return_goes_on_in_the_restored_state(source):
+    case = random_case(random.Random(24), source)
+    case.regs[14] = 0x08000102  # the caller's Thumb code, halfword aligned
+    out = run_lifted([case])[0]
+    assert out.status == "returned"
+    assert out.cpsr & 0x3F == 0x3F  # system mode, Thumb state
+
+
+def test_a_call_chain_that_never_returns_is_stopped():
+    # Thumb code that uses bl as a long jump: every pass nests one more C call.
+    case = random_case(random.Random(25), "loop:\n    adds r0, #1\n    bl loop", thumb=True)
+    lifted, oracle = run_lifted([case])[0], run_oracle([case])[0]
+    assert lifted.status == oracle.status == "runaway"

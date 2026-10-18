@@ -78,6 +78,13 @@ def lift_effects(ins: Instruction) -> list[str]:
     raise LiftError(f"{ins.addr:#010x}: no effects for {op.value}")
 
 
+def restores_cpsr(ins: Instruction) -> bool:
+    """An exception return (movs pc, ... or ldm ... {..., pc}^): CPSR = SPSR, T bit included."""
+    if ins.op in DATA_PROCESSING_OPS:
+        return ins.s and ins.rd == PC
+    return ins.op is Op.LDM and ins.user and PC in ins.reglist
+
+
 def cycles(ins: Instruction) -> int:
     """A rough cycle estimate; the scheduler only needs the right order of magnitude."""
     op = ins.op
@@ -119,7 +126,7 @@ def _data_processing(ins: Instruction) -> list[str]:
         return [f"{dest(ins.rd)} = {hexu(ins.target)};"]
     by_register = ins.shift is not None and ins.shift.reg is not None
     extra = 4 if by_register and ins.mode is Mode.ARM else 0
-    exception_return = ins.s and ins.rd == PC
+    exception_return = restores_cpsr(ins)
     flags = ins.s and not exception_return
     operand = _operand2(ins, carry=flags and op in LOGICAL_OPS, extra=extra)
     a = None if op in MOVE_OPS else read(ins, ins.rn, extra)
@@ -219,7 +226,7 @@ def _block_transfer(ins: Instruction) -> list[str]:
     first = {(False, True): 0, (True, True): 4, (False, False): -4 * count + 4,
              (True, False): -4 * count}[(ins.pre, ins.up)]
     final = f"{base} {'+' if ins.up else '-'} {hexu(4 * count)}"
-    restore = ins.user and ins.op is Op.LDM and PC in regs
+    restore = restores_cpsr(ins)
     user = ins.user and not restore
     body = [f"uint32_t addr = ({base} + {hexu(first)}) & ~3u;", f"uint32_t final = {final};"]
     for i, r in enumerate(regs):

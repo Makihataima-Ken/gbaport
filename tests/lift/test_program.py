@@ -57,4 +57,4 @@ def test_an_instruction_c_cannot_express_is_reported():
 
 def test_calls_to_recompiled_functions_are_direct():
     code = lifted(CRT0).functions[0x080000E8]  # Thumb main calls helper with bl
-    assert "gba_call(ctx, f_080000f6(ctx), 0x080000efu);" in code
+    assert "gba_call_direct(ctx, f_080000f6, 0x080000efu);" in code
