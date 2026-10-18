@@ -2,7 +2,9 @@
 
 Every block becomes a label. A branch to a block of the function is a goto;
 whatever leaves the function (a return, a tail call, a jump through a register)
-returns the address to continue at. A call sets LR and runs the callee chain
+returns the address to continue at, with bit 0 set when execution goes on in
+Thumb state. The lookup ignores that bit; a miss reports it, so the user knows
+which state the missing code is in. A call sets LR and runs the callee chain
 with ``gba_call`` until it comes back to the return address. Blocks that loops
 or switches jump back to check for due events, so long loops still let the
 scheduler run.
@@ -97,7 +99,7 @@ class _FunctionLifter:
             last = block.instructions[-1]
             nxt = last.addr + last.size
             if nxt != following:
-                lines.append("    " + self._go(nxt))
+                lines.append("    " + self._go(nxt, block.mode))
         return lines
 
     def _predecessor(self, start: int, mode: Mode) -> Instruction | None:
@@ -115,17 +117,17 @@ class _FunctionLifter:
         if op is Op.B:
             if ins.target == after:  # a branch to the next instruction does nothing
                 return [], False
-            return [self._go(ins.target)], True
+            return [self._go(ins.target, ins.mode)], True
         if op is Op.BL:
             ret = self._return_address(ins)
             set_lr = f"ctx->r[14] = {hexu(ret)};"
             if ins.target == after:  # only sets LR (a weak call, or reading the pc)
                 return [set_lr], False
-            return [set_lr, self._call(ins.target, ret)], False
+            return [set_lr, self._call(ins.target, ret, ins.mode)], False
         if op is Op.BL_LO:
             ret = self._return_address(ins)
             return [
-                f"t = ctx->r[14] + {hexu(ins.imm)};",
+                f"t = (ctx->r[14] + {hexu(ins.imm)}) | 1u;",  # stays in Thumb state
                 f"ctx->r[14] = {hexu(ret)};",
                 f"gba_call(ctx, t, {hexu(ret)});",
             ], False
@@ -145,23 +147,23 @@ class _FunctionLifter:
         after = ins.addr + ins.size
         return after | 1 if ins.mode is Mode.THUMB else after
 
-    def _call(self, target: int, ret: int) -> str:
+    def _call(self, target: int, ret: int, mode: Mode) -> str:
         """A call to a constant target: direct when that function was recompiled."""
         if target in self.program.functions:
             return f"gba_call_direct(ctx, {function_name(target, self.prefix)}, {hexu(ret)});"
-        return f"gba_call(ctx, {hexu(target)}, {hexu(ret)});"
+        return f"gba_call(ctx, {hexu(_in_state(target, mode))}, {hexu(ret)});"
 
-    def _go(self, target: int) -> str:
+    def _go(self, target: int, mode: Mode) -> str:
         if target in self.blocks:
             return f"goto {label(target)};"
-        return f"GBA_EXIT({hexu(target)});"
+        return f"GBA_EXIT({hexu(_in_state(target, mode))});"
 
     def _mask(self, ins: Instruction) -> list[str]:
         if ins.op is Op.BX:
             return []  # bit 0 selects the state; the lookup ignores it
-        if restores_cpsr(ins):  # the restored T bit decides the alignment
-            return ["t &= (ctx->cpsr_ctrl & 0x20u) ? ~1u : ~3u;"]
-        return ["t &= ~3u;" if ins.mode is Mode.ARM else "t &= ~1u;"]
+        if restores_cpsr(ins):  # the restored T bit decides the state
+            return ["t = (ctx->cpsr_ctrl & 0x20u) ? t | 1u : t & ~3u;"]
+        return ["t &= ~3u;" if ins.mode is Mode.ARM else "t |= 1u;"]  # no state change
 
     def _switch(self, ins: Instruction) -> list[str]:
         """Jumps to known cases (jump tables, traced targets) stay inside the function."""
@@ -176,3 +178,8 @@ class _FunctionLifter:
         lines += [f"case {hexu(s)}: goto {label(s)};" for s in sorted(set(cases))]
         lines += ["default: break;", "}"]
         return lines
+
+
+def _in_state(target: int, mode: Mode) -> int:
+    """``target`` with bit 0 telling the state execution continues in."""
+    return target | 1 if mode is Mode.THUMB else target

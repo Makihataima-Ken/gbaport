@@ -2,8 +2,9 @@
 
 The dispatch table maps each recompiled function's address to its C function;
 ``gba_lookup`` (prefixed in tests, so several programs can share one binary)
-finds the function for an address with a binary search and hands anything
-else to the runtime's ``gba_missing``.
+finds the function for an address with a binary search (bit 0, the CPU state,
+does not matter) and hands anything else to the runtime's ``gba_missing``, bit 0
+included.
 """
 
 from dataclasses import dataclass
@@ -76,7 +77,7 @@ def _dispatch(entries: list[int], prefix: str) -> str:
         "",
         f"GbaFn {prefix}gba_lookup(GbaCtx *ctx, uint32_t addr)",
         "{",
-        "    addr &= ~1u;",
+        "    uint32_t key = addr & ~1u;",
     ]
     if entries:
         lines += [
@@ -84,9 +85,9 @@ def _dispatch(entries: list[int], prefix: str) -> str:
             "    while (lo < hi) {",
             "        uint32_t mid = (lo + hi) / 2;",
             f"        uint32_t found = {prefix}table[mid].addr;",
-            "        if (found == addr)",
+            "        if (found == key)",
             f"            return {prefix}table[mid].fn;",
-            "        if (found < addr)",
+            "        if (found < key)",
             "            lo = mid + 1;",
             "        else",
             "            hi = mid;",

@@ -58,3 +58,13 @@ def test_an_instruction_c_cannot_express_is_reported():
 def test_calls_to_recompiled_functions_are_direct():
     code = lifted(CRT0).functions[0x080000E8]  # Thumb main calls helper with bl
     assert "gba_call_direct(ctx, f_080000f6, 0x080000efu);" in code
+
+
+def test_exits_carry_the_state_execution_continues_in():
+    thumb = lifted("push {lr}\n    pop {pc}", thumb=True).functions[0x080000C0]
+    assert "t |= 1u;" in thumb  # pop {pc} stays in Thumb state: bit 0 says so
+    arm = lifted("ldr pc, [sp], #4").functions[0x080000C0]
+    assert "t &= ~3u;" in arm
+    dispatch = lifted(TWO_FUNCTIONS).dispatch
+    assert "uint32_t key = addr & ~1u;" in dispatch
+    assert "return gba_missing(ctx, addr);" in dispatch  # the runtime sees the state bit

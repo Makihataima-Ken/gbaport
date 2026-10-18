@@ -1,0 +1,46 @@
+from romtest import build_test_rom, run_rom, run_test
+
+
+def test_a_test_rom_runs_natively_and_reports_through_the_debug_log():
+    run = run_test("hello")
+    assert run.lines == ("hello from the GBA", "PASS arithmetic", "DONE 1 passed, 0 failed")
+    run.assert_passed()
+
+
+def test_the_memory_map():
+    run_test("mem_map").assert_passed()
+
+
+def test_bios_resets_and_unknown_calls():
+    run = run_test("bios_calls")
+    run.assert_passed()
+    assert "ignoring SWI 0x2b" in run.stderr
+
+
+def test_a_missing_bios_function_ends_the_run_with_its_number():
+    run = run_test("err_swi")
+    assert run.status == 3
+    assert run.lines == ("before",)
+    assert "BIOS function 0x06 is not implemented yet" in run.stderr
+
+
+def test_a_jump_to_code_that_was_not_recompiled_names_the_address():
+    run = run_test("err_missing")
+    assert run.status == 3
+    assert "no recompiled code at 0x08100000 (Thumb state" in run.stderr
+    assert "thumb_entries" in run.stderr
+
+
+def test_the_frame_limit_ends_a_game_that_never_stops():
+    run = run_test("forever", frames=3)
+    assert run.status == 4
+    assert "stopped after 3 frames" in run.stderr
+
+
+def test_a_build_refuses_a_different_rom():
+    rom = build_test_rom("hello")
+    other = bytearray(rom.data)
+    other[-1] ^= 0xFF
+    run = run_rom(rom, rom_file=bytes(other))
+    assert run.status == 2
+    assert "recompiled from a different ROM" in run.stderr

@@ -1,22 +1,30 @@
-"""Build the runtime test ROMs from C.
+"""Build the runtime test ROMs from C, recompile them and run them natively.
 
 A test ROM is ``gbaroms/crt0.s`` + ``gbaroms/testlib.c`` + one test file from
 ``gbaroms``, compiled with clang for the ARM7TDMI (Thumb, like games) and linked with
 ld.lld. Its game.toml lists every function symbol in the ELF as an entry and the IWRAM
-section as RAM code, so tests that run it depend on the runtime and the lifter, not on
-how much code discovery finds by itself.
+section as RAM code, so these tests depend on the runtime and the lifter, not on how
+much code discovery finds by itself. A test ROM reports through mGBA's debug log (one
+``PASS name`` or ``FAIL name: ...`` line per check, then ``DONE n passed, m failed``)
+and ends with the BIOS Stop call.
 
-ROMs are cached in the system temp folder by the hash of their sources.
+ROMs and native builds are cached in the system temp folder by the hash of their sources.
 """
 
 import hashlib
 import struct
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import gbaport.native.build as native
+from gbaport.analysis.analyze import analyze_rom
+from gbaport.analysis.config import parse_config
+from gbaport.lift.program import lift_program
 from gbaport.native.toolchain import find_clang, llvm_tool
+from gbaport.rom.image import RomImage
 
 ROMS = Path(__file__).parent / "gbaroms"
 CACHE = Path(tempfile.gettempdir()) / "gbaport-romcache"
@@ -118,3 +126,65 @@ def build_test_rom(name: str) -> TestRom:
         config_path.write_text(config_for(elf_symbols(elf.read_bytes())), encoding="utf-8")
         rom_path.write_bytes(_with_header(binary.read_bytes()))
     return TestRom(rom_path.read_bytes(), config_path.read_text(encoding="utf-8"))
+
+
+# ---- running a test ROM natively --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Run:
+    status: int
+    lines: tuple[str, ...]  # the debug log
+    stderr: str
+
+    @property
+    def failures(self) -> list[str]:
+        return [line for line in self.lines if line.startswith("FAIL")]
+
+    def assert_passed(self) -> None:
+        assert self.status == 0, f"exit status {self.status}: {self.stderr}\n" + "\n".join(self.lines)
+        assert self.failures == [], "\n".join(self.lines)
+        assert self.lines and self.lines[-1].startswith("DONE "), "\n".join(self.lines)
+
+
+def native_program(rom: TestRom) -> Path:
+    """Recompile ``rom`` and build it with the headless host (cached by the C sources)."""
+    image = RomImage(rom.data)
+    analysis = analyze_rom(image, parse_config(rom.config), ())
+    files = native.generated_sources(lift_program(analysis.program, analysis.exploration), rom.data)
+    runtime = [path.read_bytes() for path in sorted(native.RUNTIME.glob("*.[ch]"))]
+    flags = " ".join([*native.CFLAGS, *native.RUNTIME_SOURCES])
+    sources = (f"{name}\n{text}" for name, text in sorted(files.items()))
+    folder = CACHE / "native" / _digest(*sources, *runtime, flags)
+    built = folder / "program.txt"  # written last: the build finished
+    if not built.exists():
+        native.write_sources(files, folder / "generated")
+        program = native.compile_native(folder / "generated", folder / "build", "game")
+        built.write_text(str(program), encoding="utf-8")
+    return Path(built.read_text(encoding="utf-8"))
+
+
+def run_program(command: list[str]) -> subprocess.CompletedProcess:
+    """Run a native program. Windows' Smart App Control sometimes blocks a program the
+    first time it starts after being built (WinError 4551); a later start works."""
+    for attempt in range(5):
+        try:
+            return subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+        except OSError as error:
+            if getattr(error, "winerror", None) != 4551 or attempt == 4:
+                raise
+            time.sleep(2)
+    raise AssertionError("unreachable")
+
+
+def run_rom(rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None) -> Run:
+    """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set)."""
+    program = native_program(rom)
+    path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
+    path.write_bytes(rom_file or rom.data)
+    result = run_program([str(program), str(path), "--frames", str(frames)])
+    return Run(result.returncode, tuple(result.stdout.splitlines()), result.stderr)
+
+
+def run_test(name: str, *, frames: int = 600) -> Run:
+    return run_rom(build_test_rom(name), frames=frames)
