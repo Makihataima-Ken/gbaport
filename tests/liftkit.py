@@ -16,7 +16,6 @@ dependence on C or V after a multiply.
 import functools
 import hashlib
 import random
-import shutil
 import struct
 import subprocess
 import tempfile
@@ -36,6 +35,7 @@ from gbaport.analysis.space import CodeSpace
 from gbaport.isa.model import Mode
 from gbaport.lift.function import function_name
 from gbaport.lift.program import lift_program
+from gbaport.native.toolchain import find_clang as clang
 from gbaport.rom.image import RomImage
 
 WINDOW = 0x1000
@@ -113,13 +113,6 @@ def interesting(rng: random.Random) -> int:
     if rng.random() < 0.3:
         return rng.choice([0, 1, 2, 31, 32, 33, 0x7FFFFFFF, 0x80000000, 0xFFFFFFFF, 0xFFFFFFFE])
     return rng.getrandbits(32)
-
-
-def clang() -> str:
-    found = shutil.which("clang") or r"C:\Program Files\LLVM\bin\clang.exe"
-    if not Path(found).exists():
-        raise RuntimeError("clang not found: install LLVM (winget install LLVM.LLVM)")
-    return found
 
 
 def lift_cases(cases: list[Case]) -> str:
