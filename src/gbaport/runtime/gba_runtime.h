@@ -152,6 +152,10 @@ void gba_bios_cpu_fast_set(GbaRuntime *rt);
 void gba_bios_bit_unpack(GbaRuntime *rt);
 void gba_bios_bg_affine_set(GbaRuntime *rt);
 void gba_bios_obj_affine_set(GbaRuntime *rt);
+void gba_bios_lz77(GbaRuntime *rt, int halfwords);
+void gba_bios_rl(GbaRuntime *rt, int halfwords);
+void gba_bios_diff(GbaRuntime *rt, int unit, int halfwords);
+void gba_bios_huffman(GbaRuntime *rt);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */
