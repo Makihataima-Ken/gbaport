@@ -218,6 +218,9 @@ Needed later:
   halves used as long calls): trampoline dispatcher and explicit decoder support.
 - **Performance**: per-access memory dispatch; mitigated by region fast paths. The GBA
   workload (16.78 MHz CPU) is small for a modern phone.
+- **Windows Smart App Control** refuses some freshly built, unsigned programs for good,
+  judged by their content: `gbaport build` re-links a refused program with a random
+  unused string until Windows takes it.
 - **Legal**: personal use only; ROM-derived data stays out of version control.
 
 ## Open questions

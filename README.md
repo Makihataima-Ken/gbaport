@@ -40,19 +40,23 @@ as `uv run python -m gbaport.cli ...`.
 `gbaport build` recompiles the game and compiles it with the runtime into
 `games/<game_code>/build/<game_code>.exe`. Run it with the ROM it was built from:
 
-    games/XXXX/build/XXXX.exe roms/mygame.gba [--frames N]
+    games/XXXX/build/XXXX.exe roms/mygame.gba [--frames N] [--save PATH]
 
 It runs without a window for now (the desktop window comes in Plan 4c). Lines the game
 prints through mGBA's debug log go to stdout. It exits with 0 when the game executes the
-BIOS Stop call, 2 for bad arguments or a different ROM, 3 for a runtime error, and 4 when
-`--frames` runs out.
+BIOS Stop call, 2 for bad arguments, a different ROM or an unusable save file, 3 for a
+runtime error, and 4 when `--frames` runs out.
 
-With Windows' Smart App Control on, Windows judges every newly built program by its
-content and refuses some of them ("An Application Control policy has blocked this file").
-Sometimes a second start works; a program it keeps refusing stays refused, and building
-the same sources again gives the same file. Any change to the build (a new `game.toml`
-entry, a new version of gbaport) gives a new file and a new verdict. Turning Smart App
-Control off ends this, but Windows cannot turn it back on without a reinstall.
+The game's save chip (SRAM, Flash or EEPROM, as its library ID string or `game.toml`'s
+`[rom] save` says) lives in a save file: `--save PATH`, by default the ROM's path with
+`.sav` (`roms/mygame.sav`, which git ignores). It is written once a second while the game
+changes it and again when the program ends, also after a runtime error. A save file of
+the wrong size is refused and left as it is.
+
+Windows' Smart App Control judges every newly built program by its content and refuses
+some of them for good ("An Application Control policy has blocked this file"). `gbaport
+build` checks that the program starts and, when Windows refuses it, links it again with a
+few different bytes, up to 5 times.
 
 The most common runtime error is code the recompiler did not find:
 
@@ -61,6 +65,8 @@ The most common runtime error is code the recompiler did not find:
 
 Add the address to `games/<game_code>/game.toml` (`thumb_entries` or `entries`, as the
 message says) and build again, or record a trace with mGBA (below).
+`games/BT4E/game.toml` is an example: the entries Dragon Ball GT Transformation needs to
+boot and play its first minute.
 
 ## Recording traces with mGBA
 

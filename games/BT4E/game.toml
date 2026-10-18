@@ -1,0 +1,27 @@
+# Dragon Ball GT Transformation (BT4E). Addresses only: this file holds no ROM bytes.
+#
+# The entries are code the analysis cannot reach by itself, found by running the native
+# build and adding each address it reported as missing:
+# - 26 static constructors that start-up code (0x080359cc) calls through a table of
+#   relative offsets at 0x08036778-0x080367df;
+# - the IWRAM interrupt dispatcher's handlers (ARM, copied to 0x03000000 at start-up);
+# - functions reached through pointers during the first minute of play.
+[rom]
+sha1 = "8dd4b6e95dca4554a919bff55128481a9a95b611"
+
+[code]
+entries = [
+    0x03000604, 0x03000660, 0x030008d8, 0x03000d24,
+]
+thumb_entries = [
+    0x0800308e, 0x0800dc9a, 0x0800dcbe, 0x0800e064, 0x0800e666, 0x0800ea48, 0x0801a3e6,
+    0x08031750, 0x080324dc, 0x08032c84, 0x0803325c, 0x080332ea, 0x08033394, 0x080333d6,
+    0x08033418, 0x080353e4, 0x08035406, 0x08035422, 0x080354c8, 0x080360b0, 0x080360b4,
+    0x080360d4, 0x080360e4, 0x080360f4, 0x08036108, 0x0803613c, 0x08036148, 0x08036280,
+    0x0803628c, 0x0803629c, 0x080362a8, 0x08036318, 0x08036504, 0x0803651c, 0x08036574,
+    0x08036580, 0x08036590, 0x0803659c, 0x080365ac, 0x080365c8, 0x08036604, 0x08036628,
+    0x08036644, 0x0803669c, 0x080366b8, 0x08039854, 0x080398ec, 0x080398f0, 0x080398f4,
+    0x08039904, 0x080399c8, 0x08039a3c, 0x08039a50, 0x08039a64, 0x08039a68, 0x08039a6c,
+    0x08039aa0, 0x08039ab8, 0x08039f98, 0x08039f9c, 0x0803a05c, 0x0803a1fc, 0x0803a200,
+    0x0803a404, 0x0803a418, 0x0803b0fc,
+]
