@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from romtest import build_test_rom, run_rom, run_test
 
@@ -51,6 +53,36 @@ def test_a_save_file_of_another_size_is_left_alone(tmp_path):
     assert run.status == 2
     assert "the save file has 100 bytes, but this game's save chip holds 32768" in run.stderr
     assert save.read_bytes() == bytes(100)
+
+
+def test_a_save_file_that_cannot_be_read_is_refused(tmp_path):
+    save = tmp_path / "game.sav"
+    save.mkdir()  # there, but not readable as a file
+    run = run_test("save_sram", save=save)
+    assert run.status == 2
+    assert f"cannot read the save file {save}" in run.stderr
+    assert save.is_dir()
+
+
+def test_a_failed_store_keeps_the_previous_save(tmp_path):
+    save = tmp_path / "game.sav"
+    run_test("save_sram", save=save).assert_passed()
+    previous = save.read_bytes()
+    (tmp_path / "game.sav.new").mkdir()  # the new save cannot be written
+    run = run_test("save_sram", save=save)
+    assert "cannot write the save file" in run.stderr
+    assert save.read_bytes() == previous
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows file sharing")
+def test_a_save_that_cannot_be_put_in_place_keeps_the_previous_one(tmp_path):
+    save = tmp_path / "game.sav"
+    run_test("save_sram", save=save).assert_passed()
+    previous = save.read_bytes()
+    with open(tmp_path / "game.sav.new", "ab"):  # held open: it can be written, not moved
+        run = run_test("save_sram", save=save)
+    assert "cannot write the save file" in run.stderr
+    assert save.read_bytes() == previous
 
 
 def test_a_save_written_before_a_runtime_error_reaches_the_file(tmp_path):

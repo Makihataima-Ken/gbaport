@@ -9,15 +9,22 @@
  * file, 3 a runtime error (for example code the recompiler did not find), 4 the frame
  * limit was reached. */
 #define _CRT_SECURE_NO_WARNINGS
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "gba_runtime.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 static unsigned long frame_limit;
 static char save_path[1024];
 
+/* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 static uint8_t *read_file(const char *path, uint32_t *size)
 {
     FILE *f = fopen(path, "rb");
@@ -30,13 +37,25 @@ static uint8_t *read_file(const char *path, uint32_t *size)
     if (data && length > 0 && fread(data, 1, (size_t)length, f) != (size_t)length) {
         free(data);
         data = NULL;
+        errno = EIO;
     }
     fclose(f);
     *size = length > 0 ? (uint32_t)length : 0;
     return data;
 }
 
-/* Writes the save next to its file, then puts it in place, so a crash cannot leave half. */
+/* Puts `from` in the place of `to` in one step; `to` stays as it was if that fails. */
+static int replace_file(const char *from, const char *to)
+{
+#ifdef _WIN32
+    return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : -1;
+#else
+    return rename(from, to);
+#endif
+}
+
+/* Writes the save next to its file, then puts it in place: a crash or a failed write
+ * leaves the previous save as it was. */
 static void store_save(GbaRuntime *rt)
 {
     uint32_t size;
@@ -49,11 +68,13 @@ static void store_save(GbaRuntime *rt)
     int ok = f && fwrite(data, 1, size, f) == size;
     if (f)
         ok = fclose(f) == 0 && ok;
-    remove(save_path);
-    if (ok && rename(temp, save_path) == 0)
+    if (ok && replace_file(temp, save_path) == 0) {
         gba_save_stored(rt);
-    else
-        fprintf(stderr, "warning: cannot write the save file %s\n", save_path);
+        return;
+    }
+    if (f)
+        remove(temp);
+    fprintf(stderr, "warning: cannot write the save file %s\n", save_path);
 }
 
 static void on_frame(GbaRuntime *rt, void *user)
@@ -123,6 +144,10 @@ int main(int argc, char **argv)
     }
     uint32_t save_size;
     uint8_t *save = read_file(save_path, &save_size);
+    if (!save && errno != ENOENT) {
+        fprintf(stderr, "error: cannot read the save file %s (it was left as it is)\n", save_path);
+        return 2;
+    }
     if (save && gba_save_load(&rt, save, save_size) != 0) {
         fprintf(stderr, "error: %s: %s (the file was left as it is)\n", save_path, rt.error);
         return 2;
