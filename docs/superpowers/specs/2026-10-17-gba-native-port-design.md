@@ -178,10 +178,12 @@ depends on what the earlier stages reveal.
 | P2 Code discovery | `gbaport analyze` → `analysis.json` (functions, blocks, modes, jump tables, literal pools, RAM-copied code); `game.toml` loader | Synthetic programs give exact expected CFGs; coverage report on a real dump | P1 |
 | P2b Discovery coverage | Pointer scan, RAM-copy detection, trace files and their import, `gbaport trace` through mGBA's GDB server | Synthetic programs and a fake GDB server give exact results; dump coverage report before and after | P2 |
 | P3 Lifter | `gbaport recompile` → C per function + dispatch table; instruction semantics incl. flags, shifter carry, conditional execution, PC-relative rules | Unicorn differential tests for every ARMv4T operation; snippet programs match end state | P2 |
-| P4 Runtime core + desktop host | C runtime (memory map, I/O, BIOS HLE, DMA, timers, scheduler/IRQ, saves) + SDL3 desktop window | Self-built test ROMs run natively with expected results; CPU test ROMs pass when recompiled | P3 |
-| P5 Renderer | Scanline renderer, all modes/features, per-line latching | Reference-image tests on graphics test ROMs | P4 |
-| P6 Audio | PSG + FIFO mixer, resampler, SDL3 audio output | Recorded-output comparisons on sound test ROMs | P4 |
-| P7 First game on desktop + lockstep harness | User's first game boots to gameplay natively; `gbaport verify` | N-frame input replay matches mGBA within tolerance | P5, P6 |
+| P4a Runtime core | C runtime (memory map, I/O registers, scanline scheduler and interrupts, timers, DMA, the BIOS calls that control the CPU), `gbaport build`, headless host | Self-built test ROMs run natively with the expected results | P3 |
+| P4b BIOS and saves | The other BIOS functions (arithmetic, copies, decompression, affine), SRAM/Flash/EEPROM with save files | BIOS results match reference values; save test ROMs pass and their saves persist | P4a |
+| P4c Desktop host | SDL3 window, input, frame pacing, keypad wake-up | CPU test ROMs pass when recompiled; a test ROM runs in a window | P4a |
+| P5 Renderer | Scanline renderer, all modes/features, per-line latching | Reference-image tests on graphics test ROMs | P4a |
+| P6 Audio | PSG + FIFO mixer, resampler, SDL3 audio output | Recorded-output comparisons on sound test ROMs | P4c |
+| P7 First game on desktop + lockstep harness | User's first game boots to gameplay natively; `gbaport verify` | N-frame input replay matches mGBA within tolerance | P4b, P5, P6 |
 | P8 Android | Gradle/NDK project generated per game, touch overlay, controller, lifecycle, saves | APK runs on device at 60 fps; save survives app kill | P7 |
 | P9 iOS | Xcode project via CMake generator, signing, same features as Android | IPA runs on device at 60 fps | P7, needs macOS |
 | P10 Decomp loop | Override mechanism, Ghidra headless export, Claude agent loop, function-level differential tester | Functions replaced with tests passing; game still verifies | P7 |
@@ -196,8 +198,10 @@ installed for Plan 3).
 Needed later:
 
 - Unicorn 2.1.3 (Python dev dependency, the lifter's oracle) — added in Plan 3.
-- CMake ≥ 3.28 and Ninja (`winget install Kitware.CMake Ninja-build.Ninja`) — Plans 3–4.
-- SDL3 (fetched by CMake `FetchContent`) — Plan 4.
+- CMake ≥ 3.28 and Ninja (bundled with the MSVC Build Tools; elsewhere
+  `winget install Kitware.CMake Ninja-build.Ninja`) — Plan 4c. Plan 4a builds with clang
+  directly.
+- SDL3 (fetched by CMake `FetchContent`) — Plan 4c.
 - Android SDK + NDK r27 or newer (Android Studio or `sdkmanager`) — Plan 8.
 - macOS with Xcode 16 or newer, or a macOS CI runner, plus an Apple developer account — Plan 9.
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
