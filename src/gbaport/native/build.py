@@ -24,6 +24,7 @@ RUNTIME_SOURCES = ("runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "
 HOSTS = {"headless": "host_headless.c"}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c
 CFLAGS = ("-std=c11", "-O2", "-Wall", "-Werror", "-Wno-unused-label")
+SALTED_REBUILDS = 5  # how often a build Windows refuses to start is made again
 
 
 def rom_identity(data: bytes) -> str:
@@ -72,10 +73,43 @@ def compile_native(sources: Path, out: Path, name: str, host: str = "headless") 
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
         compiled = list(pool.map(compile_unit, units))
     program = out / (name + (".exe" if os.name == "nt" else ""))
+    _link(clang, compiled, program)
+    for _ in range(SALTED_REBUILDS):
+        if _starts(program):
+            return program
+        salt = objects / "gba_salt.c"
+        salt.write_text(f'const char gba_build_salt[] = "{os.urandom(8).hex()}";\n', encoding="utf-8")
+        _link(clang, [*compiled, compile_unit(salt)], program)
+    if _starts(program):
+        return program
+    raise ToolchainError(
+        f"Windows refused to start {program} after {SALTED_REBUILDS} rebuilds "
+        "(Smart App Control): turn it off to run programs you build"
+    )
+
+
+def _link(clang: str, objects: list[Path], program: Path) -> None:
     result = subprocess.run(
-        [clang, *(str(obj) for obj in compiled), "-o", str(program)],
+        [clang, *(str(obj) for obj in objects), "-o", str(program)],
         capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:
         raise ToolchainError(f"linking {program.name} failed:\n{result.stderr[-4000:]}")
-    return program
+
+
+def _starts(program: Path) -> bool:
+    """Whether Windows lets ``program`` start (without arguments it prints its usage).
+
+    Smart App Control judges each new program by its content and refuses some for good
+    (WinError 4551); building the same sources again gives the same file, so a refused
+    build is linked again with ``gba_salt.c``, an unused string that changes the bytes.
+    """
+    if os.name != "nt":
+        return True
+    try:
+        subprocess.run([str(program)], capture_output=True, timeout=30, check=False)
+    except OSError as error:
+        if getattr(error, "winerror", None) != 4551:
+            raise
+        return False
+    return True

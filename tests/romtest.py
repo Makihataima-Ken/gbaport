@@ -12,7 +12,6 @@ ROMs and native builds are cached in the system temp folder by the hash of their
 """
 
 import hashlib
-import os
 import struct
 import subprocess
 import tempfile
@@ -149,12 +148,7 @@ class Run:
 
 
 def native_program(rom: TestRom) -> Path:
-    """Recompile ``rom`` and build it with the headless host (cached by the C sources).
-
-    Windows' Smart App Control refuses some freshly built programs for good, judging each
-    file by its content. A build it refuses is made again with a different ``gba_salt.c``,
-    which changes the program's bytes but not what it does.
-    """
+    """Recompile ``rom`` and build it with the headless host (cached by the C sources)."""
     image = RomImage(rom.data)
     analysis = analyze_rom(image, parse_config(rom.config), ())
     files = native.generated_sources(lift_program(analysis.program, analysis.exploration), rom.data)
@@ -163,30 +157,11 @@ def native_program(rom: TestRom) -> Path:
     sources = (f"{name}\n{text}" for name, text in sorted(files.items()))
     folder = CACHE / "native" / _digest(*sources, *runtime, flags)
     built = folder / "program.txt"  # written last: the build finished
-    if built.exists() and _starts(Path(built.read_text(encoding="utf-8"))):
-        return Path(built.read_text(encoding="utf-8"))
-    native.write_sources(files, folder / "generated")
-    for _ in range(5):
-        salt = os.urandom(8).hex()
-        (folder / "generated" / "gba_salt.c").write_text(
-            f'const char gba_build_salt[] = "{salt}";\n', encoding="utf-8"
-        )
-        program = native.compile_native(folder / "generated", folder / f"build-{salt}", "game")
-        if _starts(program):
-            break
-    built.write_text(str(program), encoding="utf-8")
-    return program
-
-
-def _starts(program: Path) -> bool:
-    """Whether Windows lets ``program`` start (without arguments it prints its usage)."""
-    try:
-        subprocess.run([str(program)], capture_output=True, timeout=30, check=False)
-    except OSError as error:
-        if getattr(error, "winerror", None) != 4551:
-            raise
-        return False
-    return True
+    if not built.exists():
+        native.write_sources(files, folder / "generated")
+        program = native.compile_native(folder / "generated", folder / "build", "game")
+        built.write_text(str(program), encoding="utf-8")
+    return Path(built.read_text(encoding="utf-8"))
 
 
 def run_program(command: list[str]) -> subprocess.CompletedProcess:
