@@ -48,16 +48,17 @@ static void register_ram_reset(GbaRuntime *rt, uint32_t flags)
 }
 
 /* IntrWait: wait until the IRQ handler has set one of `flags` in BIOS_IF, then clear it.
- * With `discard`, flags that were already set do not count. The BIOS turns IME on. */
+ * With `discard`, flags that were already set do not count. Like the BIOS, it turns IME on
+ * again on every pass, so a handler that leaves IME off cannot stop the wait. */
 static void intr_wait(GbaRuntime *rt, uint32_t discard, uint32_t flags)
 {
     GbaCtx *ctx = &rt->cpu;
-    IO(rt, GBA_REG_IME) = 1;
     if (ctx->cpsr_ctrl & 0x80)
         gba_fail(rt, "IntrWait was called with interrupts disabled in the CPSR; it would never return");
     if (discard)
         gba_write16(ctx, BIOS_IF, gba_read16(ctx, BIOS_IF) & ~flags);
     for (;;) {
+        IO(rt, GBA_REG_IME) = 1;
         uint32_t set = gba_read16(ctx, BIOS_IF);
         if (set & flags) {
             gba_write16(ctx, BIOS_IF, set & ~flags);

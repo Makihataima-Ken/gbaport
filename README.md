@@ -45,9 +45,14 @@ as `uv run python -m gbaport.cli ...`.
 It runs without a window for now (the desktop window comes in Plan 4c). Lines the game
 prints through mGBA's debug log go to stdout. It exits with 0 when the game executes the
 BIOS Stop call, 2 for bad arguments or a different ROM, 3 for a runtime error, and 4 when
-`--frames` runs out. With Windows' Smart App Control on, a program that was just built is
-sometimes blocked the first time it starts ("An Application Control policy has blocked
-this file"); starting it again works.
+`--frames` runs out.
+
+With Windows' Smart App Control on, Windows judges every newly built program by its
+content and refuses some of them ("An Application Control policy has blocked this file").
+Sometimes a second start works; a program it keeps refusing stays refused, and building
+the same sources again gives the same file. Any change to the build (a new `game.toml`
+entry, a new version of gbaport) gives a new file and a new verdict. Turning Smart App
+Control off ends this, but Windows cannot turn it back on without a reinstall.
 
 The most common runtime error is code the recompiler did not find:
 

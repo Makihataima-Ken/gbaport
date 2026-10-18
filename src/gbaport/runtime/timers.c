@@ -38,6 +38,10 @@ static void schedule(GbaRuntime *rt, int n)
 void gba_timer_write(GbaRuntime *rt, int n, uint16_t control)
 {
     GbaTimer *t = &rt->timer[n];
+    /* Overflows that were due before this write (the scheduler has not run them yet,
+     * because blocks add their cycles up front) happened first. */
+    while (rt->event_at[GBA_EVENT_TIMER0 + n] <= rt->cpu.cycles)
+        gba_timer_overflow(rt, n, rt->event_at[GBA_EVENT_TIMER0 + n]);
     int starting = !(t->control & 0x80) && (control & 0x80);
     t->counter = gba_timer_counter(rt, n);  /* keep the count under the old settings */
     t->start = rt->cpu.cycles;
