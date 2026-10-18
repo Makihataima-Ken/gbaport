@@ -17,11 +17,11 @@ def test_bios_resets_and_unknown_calls():
     assert "ignoring SWI 0x2b" in run.stderr
 
 
-def test_a_missing_bios_function_ends_the_run_with_its_number():
-    run = run_test("err_swi")
-    assert run.status == 3
-    assert run.lines == ("before",)
-    assert "BIOS function 0x06 is not implemented yet" in run.stderr
+def test_the_bios_sound_driver_is_ignored_with_a_warning():
+    run = run_test("bios_sound")
+    run.assert_passed()
+    assert run.lines[:2] == ("before", "after")
+    assert "ignoring the BIOS sound driver (SWI 0x1c)" in run.stderr
 
 
 def test_a_jump_to_code_that_was_not_recompiled_names_the_address():

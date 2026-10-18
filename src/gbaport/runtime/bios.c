@@ -1,10 +1,12 @@
 /* bios.c - the BIOS calls (SWI), reimplemented in C.
  *
- * This file has the calls that control the CPU: resets, Halt, Stop and the interrupt
- * waits. The other BIOS functions (0x06-0x2A: arithmetic, copies, decompression, ...)
- * are not implemented yet and end the run with an error that names them. Numbers above
- * 0x2A do not exist in the BIOS; the first one is reported and they are ignored. */
-#include <stdio.h>
+ * gba_swi dispatches every call. This file has the ones that control the CPU (resets,
+ * Halt, Stop, the interrupt waits) and the small ones; the others are in
+ * - bios_math.c: Div, DivArm, Sqrt, ArcTan, ArcTan2, MidiKey2Freq.
+ * Any other BIOS function ends the run with an error that names it, for now.
+ * The sound driver calls (0x1A-0x1E, 0x20-0x24, 0x28-0x2A) are ignored with a warning
+ * until sound arrives. Numbers above 0x2A do not exist in the BIOS; they are ignored with
+ * a warning too. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -82,16 +84,34 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
         ctx->r[0] = ctx->r[1] = 1;
         intr_wait(rt, 1, GBA_IRQ_VBLANK);
         break;
+    case 0x06: gba_bios_div(rt, (int32_t)ctx->r[0], (int32_t)ctx->r[1]); break;
+    case 0x07: gba_bios_div(rt, (int32_t)ctx->r[1], (int32_t)ctx->r[0]); break;  /* DivArm */
+    case 0x08: gba_bios_sqrt(rt); break;
+    case 0x09: gba_bios_arctan(rt); break;
+    case 0x0A: gba_bios_arctan2(rt); break;
+    case 0x0D: ctx->r[0] = 0xBAAE187Fu; break;  /* GetBiosChecksum */
+    case 0x19:  /* SoundBias: straight to the target level */
+        IO(rt, 0x088) = (uint16_t)((IO(rt, 0x088) & 0xC000) | (ctx->r[0] ? 0x200 : 0));
+        break;
+    case 0x1F: gba_bios_midi_key_to_freq(rt); break;
+    case 0x25: ctx->r[0] = 1; break;  /* MultiBoot fails: there is no link cable */
+    case 0x27:  /* CustomHalt: r2's low byte goes to HALTCNT */
+        if (ctx->r[2] & 0x80)
+            gba_end(rt, GBA_END_STOPPED);
+        gba_halt(rt);
+        break;
+    case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E:
+    case 0x20: case 0x21: case 0x22: case 0x23: case 0x24:
+    case 0x28: case 0x29: case 0x2A:
+        gba_warn_once(rt, GBA_WARN_SOUND,
+                      "ignoring the BIOS sound driver (SWI 0x%02x) until sound arrives",
+                      (unsigned)number);
+        break;
     default:
         if (number <= 0x2A)
             gba_fail(rt, "BIOS function 0x%02x is not implemented yet", (unsigned)number);
-        if (!rt->warned_swi && rt->host.diag) {
-            char text[96];
-            snprintf(text, sizeof text, "ignoring SWI 0x%02x: the BIOS has no such function",
-                     (unsigned)number);
-            rt->host.diag(rt, text, rt->host.user);
-        }
-        rt->warned_swi = 1;
+        gba_warn_once(rt, GBA_WARN_SWI, "ignoring SWI 0x%02x: the BIOS has no such function",
+                      (unsigned)number);
         break;
     }
     rt->bios_bus = 0xE3A02004u;  /* the opcode the BIOS fetches last on its way out */

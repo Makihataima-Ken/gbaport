@@ -20,7 +20,10 @@ from gbaport.rom.image import ROM_BASE, RomImage
 
 PACKAGE = Path(__file__).parent.parent
 RUNTIME = PACKAGE / "runtime"
-RUNTIME_SOURCES = ("runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "dma.c", "bios.c")
+RUNTIME_SOURCES = (
+    "runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "dma.c",
+    "bios.c", "bios_math.c",
+)
 HOSTS = {"headless": "host_headless.c"}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c
 CFLAGS = ("-std=c11", "-O2", "-Wall", "-Werror", "-Wno-unused-label")

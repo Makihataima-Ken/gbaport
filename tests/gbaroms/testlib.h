@@ -49,6 +49,20 @@ uint32_t get_cpsr(void);               /* ARM code: MRS and MSR do not exist in 
 void set_cpsr_control(uint32_t value);  /* MSR cpsr_c */
 void wait_vcount(uint32_t line);       /* busy-wait until VCOUNT == line */
 
+/* Any BIOS call: r0-r3 in from in[0..3], out to out[0..3]. */
+#define BIOS_CALL(number, in, out) do { \
+        register uint32_t r0_ __asm__("r0") = (in)[0]; \
+        register uint32_t r1_ __asm__("r1") = (in)[1]; \
+        register uint32_t r2_ __asm__("r2") = (in)[2]; \
+        register uint32_t r3_ __asm__("r3") = (in)[3]; \
+        __asm__ volatile("svc #" #number : "+r"(r0_), "+r"(r1_), "+r"(r2_), "+r"(r3_) :: "memory"); \
+        (out)[0] = r0_, (out)[1] = r1_, (out)[2] = r2_, (out)[3] = r3_; \
+    } while (0)
+
+/* Counts a mismatch and prints the first few (for tests that run many cases). */
+void mismatch(const char *what, uint32_t a, uint32_t b, uint32_t got, uint32_t want);
+uint32_t mismatches(void);  /* how many since the last call, then starts again */
+
 static inline void bios_halt(void) { __asm__ volatile("svc #2" ::: "r0", "r1", "r2", "r3", "memory"); }
 static inline void bios_vblank_wait(void)
 {

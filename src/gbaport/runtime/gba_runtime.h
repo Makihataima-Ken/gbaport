@@ -50,6 +50,13 @@ typedef enum {
     GBA_END_HOST = 4,     /* the host asked to end the run (gba_end) */
 } GbaEnd;
 
+typedef enum {  /* runtime warnings, each reported once a run */
+    GBA_WARN_SWI = 1 << 0,           /* a SWI number the BIOS does not have */
+    GBA_WARN_DIV_ZERO = 1 << 1,
+    GBA_WARN_BAD_ARGUMENT = 1 << 2,  /* a BIOS call with arguments it rejects */
+    GBA_WARN_SOUND = 1 << 3,         /* the BIOS sound driver, not implemented yet */
+} GbaWarning;
+
 typedef struct GbaRuntime GbaRuntime;
 
 typedef struct {
@@ -94,7 +101,7 @@ struct GbaRuntime {
 
     char debug_text[0x101];
     int debug_enabled;
-    int warned_swi;
+    unsigned warned;  /* GbaWarning bits already reported */
 
     jmp_buf end_jump;
     int resetting;
@@ -119,6 +126,7 @@ uint32_t gba_crc32(const uint8_t *data, uint32_t size);
 static inline GbaRuntime *gba_rt(GbaCtx *ctx) { return (GbaRuntime *)ctx->runtime; }
 void gba_fail(GbaRuntime *rt, const char *fmt, ...);  /* runtime error: ends the run */
 void gba_reset(GbaRuntime *rt);                       /* SoftReset: restarts gba_run */
+void gba_warn_once(GbaRuntime *rt, GbaWarning kind, const char *fmt, ...);
 void gba_reset_io(GbaRuntime *rt);
 
 uint16_t gba_io_read(GbaRuntime *rt, uint32_t offset);   /* offset is halfword-aligned */
@@ -133,6 +141,12 @@ void gba_halt(GbaRuntime *rt);             /* until IE & IF, then deliver the in
 void gba_timer_write(GbaRuntime *rt, int n, uint16_t control);
 uint16_t gba_timer_counter(GbaRuntime *rt, int n);
 void gba_timer_overflow(GbaRuntime *rt, int n, uint64_t when);
+
+void gba_bios_div(GbaRuntime *rt, int32_t num, int32_t den);
+void gba_bios_sqrt(GbaRuntime *rt);
+void gba_bios_arctan(GbaRuntime *rt);
+void gba_bios_arctan2(GbaRuntime *rt);
+void gba_bios_midi_key_to_freq(GbaRuntime *rt);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

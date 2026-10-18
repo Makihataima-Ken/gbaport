@@ -105,6 +105,21 @@ void gba_reset(GbaRuntime *rt)
     longjmp(rt->end_jump, 1);
 }
 
+void gba_warn_once(GbaRuntime *rt, GbaWarning kind, const char *fmt, ...)
+{
+    if (rt->warned & kind)
+        return;
+    rt->warned |= kind;
+    if (!rt->host.diag)
+        return;
+    char text[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(text, sizeof text, fmt, args);
+    va_end(args);
+    rt->host.diag(rt, text, rt->host.user);
+}
+
 void gba_fail(GbaRuntime *rt, const char *fmt, ...)
 {
     va_list args;

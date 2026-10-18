@@ -118,6 +118,21 @@ void expect(const char *name, uint32_t got, uint32_t want)
     }
 }
 
+static uint32_t mismatch_count;
+
+void mismatch(const char *what, uint32_t a, uint32_t b, uint32_t got, uint32_t want)
+{
+    if (mismatch_count++ < 3)
+        print("  %s(0x%08x, 0x%08x): got 0x%08x, want 0x%08x", what, a, b, got, want);
+}
+
+uint32_t mismatches(void)
+{
+    uint32_t n = mismatch_count;
+    mismatch_count = 0;
+    return n;
+}
+
 void test_end(void)
 {
     print("DONE %u passed, %u failed", passed, failed);
