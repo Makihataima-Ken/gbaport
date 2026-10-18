@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from gbaport.analysis.config import GameConfig, default_config_path, load_config
 from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save_trace
 from gbaport.disasm import disassemble, format_line
 from gbaport.isa.model import Mode
+from gbaport.lift.program import HEADER, lift_program, program_files
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
@@ -28,6 +30,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_disasm_command(commands)
     _add_analyze_command(commands)
     _add_trace_command(commands)
+    _add_recompile_command(commands)
     return parser
 
 
@@ -88,8 +91,8 @@ def _add_analyze_command(commands) -> None:
     analyze.set_defaults(handler=_run_analyze)
 
 
-def _run_analyze(args: argparse.Namespace) -> int:
-    rom = RomImage.load(args.rom)
+def _analyse(args: argparse.Namespace, rom: RomImage):
+    """Analyse ``rom`` with its game.toml and traces, printing which ones were used."""
     game_code = parse_header(rom).game_code
     config_path = args.config or default_config_path(game_code)
     config = load_config(config_path) if config_path else GameConfig()
@@ -101,6 +104,12 @@ def _run_analyze(args: argparse.Namespace) -> int:
         print(f"{'config':<13}{config_path}")
     for path in trace_paths:
         print(f"{'trace':<13}{path}")
+    return analysis
+
+
+def _run_analyze(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    analysis = _analyse(args, rom)
     for line in summary_lines(analysis):
         print(line)
     for issue in sorted_issues(analysis.exploration)[: args.issues]:
@@ -176,6 +185,49 @@ def _run_trace(args: argparse.Namespace) -> int:
     finally:
         client.close()
     print(f"wrote {out} ({len(recorded.hits)} hits)")
+    return 0
+
+
+def _add_recompile_command(commands) -> None:
+    recompile = commands.add_parser("recompile", help="lift the analysed code to C")
+    recompile.add_argument("rom", help="path to a .gba file")
+    recompile.add_argument(
+        "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
+    )
+    recompile.add_argument(
+        "--trace",
+        action="append",
+        default=[],
+        help="trace file to import (repeatable; games/<game_code>/traces/*.trace are read too)",
+    )
+    recompile.add_argument(
+        "--out", help="directory for the C sources (default: games/<game_code>/generated)"
+    )
+    recompile.set_defaults(handler=_run_recompile)
+
+
+GENERATED = ("gba_program.h", "gba_dispatch.c", HEADER)
+
+
+def _run_recompile(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    analysis = _analyse(args, rom)
+    lifted = lift_program(analysis.program, analysis.exploration)
+    files = program_files(lifted)
+    out = Path(args.out) if args.out else Path("games") / analysis.info.header.game_code / "generated"
+    out.mkdir(parents=True, exist_ok=True)
+    for stale in [*out.glob("gba_code_*.c"), *(out / name for name in GENERATED)]:
+        stale.unlink(missing_ok=True)  # only files this command writes
+    for name, text in files.items():
+        (out / name).write_text(text, encoding="utf-8", newline="\n")
+    shutil.copyfile(Path(__file__).parent / "lift" / HEADER, out / HEADER)
+    lines = sum(text.count("\n") for text in files.values())
+    print(f"{'functions':<13}{len(lifted.functions)}")
+    print(f"{'C files':<13}{len(files) + 1} ({lines} lines)")
+    print(f"{'lift issues':<13}{len(lifted.problems)}")
+    for problem in lifted.problems[:20]:
+        print(f"  {problem}")
+    print(f"wrote {out}")
     return 0
 
 

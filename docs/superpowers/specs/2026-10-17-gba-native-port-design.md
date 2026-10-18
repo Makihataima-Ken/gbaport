@@ -93,12 +93,16 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
 - **CPU context.** `GbaCpu { uint32_t r[16]; bool n, z, c, v; uint32_t mode; banked regs; }`
   inside `GbaCtx`, passed to every generated function `void f_08001234(GbaCtx *ctx)`.
   Register values live in the struct; clang keeps hot ones in host registers inside a function.
-- **Calls.** A direct `BL` becomes a direct C call. Indirect branches (`BX reg`, `LDR pc`,
-  `MOV pc`, `POP {pc}`) go through `gba_dispatch(ctx, target)`, a sorted address→function
-  table. A miss aborts with the address and the hint to add it to `game.toml`.
-- **Returns.** Each function records the link register at entry. An indirect branch to that
-  value returns from the C function; any other indirect branch is a tail call routed through
-  a trampoline loop so long state-machine chains cannot overflow the C stack.
+- **Calls.** Every recompiled function returns the guest address execution continues at.
+  A call site sets LR and runs `gba_call(ctx, next, return_address)`: a loop that looks up
+  each returned address in a sorted address→function table (`gba_lookup`) and runs it, until
+  the chain comes back to the call's return address. A direct `BL` to a recompiled function
+  starts the loop with a direct C call. A lookup miss aborts with the address and the hint
+  to add it to `game.toml`.
+- **Returns.** A return is just a jump to the return address, so it ends the C call that
+  made it; tail calls and jumps through registers return their target and never grow the C
+  stack. Comparing against the call site's return address, rather than the LR a function was
+  entered with, also handles code that sets LR itself before jumping (`ldr lr, =main; b init`).
 - **Memory.** Region page table (`addr >> 24`) with fast paths for EWRAM, IWRAM, VRAM, OAM,
   palette and ROM; I/O-register writes call handlers (DMA start, timer reload, IRQ ack).
 - **Timing.** Not cycle-accurate. Each generated basic block adds a compile-time cycle
@@ -183,11 +187,12 @@ depends on what the earlier stages reveal.
 ## Toolchain
 
 Already on the development machine (Windows 11): uv 0.11.32 with CPython 3.13.14, Git 2.51,
-MSVC Build Tools 14.44 (bundles CMake), OpenJDK 17, Node 26.
+MSVC Build Tools 14.44 (bundles CMake), OpenJDK 17, Node 26, LLVM 23.1.3 (clang + lld,
+installed for Plan 3).
 
 Needed later:
 
-- LLVM/clang + lld (`winget install LLVM.LLVM`) — Plan 3.
+- Unicorn 2.1.3 (Python dev dependency, the lifter's oracle) — added in Plan 3.
 - CMake ≥ 3.28 and Ninja (`winget install Kitware.CMake Ninja-build.Ninja`) — Plans 3–4.
 - SDL3 (fetched by CMake `FetchContent`) — Plan 4.
 - Android SDK + NDK r27 or newer (Android Studio or `sdkmanager`) — Plan 8.
