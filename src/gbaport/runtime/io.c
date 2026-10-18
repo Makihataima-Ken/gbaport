@@ -7,7 +7,8 @@
  * - DMA source, destination and count registers are write-only: they read as 0.
  * - Writing IE, IF or IME can make an interrupt deliverable.
  * - Writing HALTCNT halts or stops the CPU.
- * - Timer counters are worked out from the cycle count; writes set the reload value. */
+ * - Timer counters are worked out from the cycle count; writes set the reload value.
+ * - Starting a DMA channel latches its registers and may run it at once. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -50,6 +51,11 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
 {
     uint16_t old = IO(rt, offset);
     uint16_t merged = (uint16_t)((old & ~mask) | (value & mask));
+    int channel = dma_channel(offset);
+    if (channel >= 0) {
+        gba_dma_write(rt, channel, merged);
+        return;
+    }
     if (offset >= GBA_REG_TM0CNT_L && offset <= GBA_REG_TM3CNT_H) {
         int n = (int)(offset - GBA_REG_TM0CNT_L) / 4;
         if (offset & 2)

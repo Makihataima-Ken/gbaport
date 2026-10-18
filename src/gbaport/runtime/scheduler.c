@@ -71,6 +71,8 @@ static void hblank(GbaRuntime *rt)
     IO(rt, GBA_REG_DISPSTAT) |= 2;
     if (IO(rt, GBA_REG_DISPSTAT) & 0x10)
         gba_request_irq(rt, GBA_IRQ_HBLANK);
+    if (IO(rt, GBA_REG_VCOUNT) < GBA_VISIBLE_LINES)  /* no HBlank DMA during VBlank */
+        gba_dma_trigger(rt, 2);
 }
 
 static void line_end(GbaRuntime *rt, uint64_t when)
@@ -92,6 +94,7 @@ static void line_end(GbaRuntime *rt, uint64_t when)
     if (line == GBA_VISIBLE_LINES) {
         if (stat & 0x08)
             gba_request_irq(rt, GBA_IRQ_VBLANK);
+        gba_dma_trigger(rt, 1);
         rt->frames++;
         if (rt->host.frame)
             rt->host.frame(rt, rt->host.user);
