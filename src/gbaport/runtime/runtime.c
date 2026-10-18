@@ -25,6 +25,7 @@ int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *h
     rt->host = *host;
     rt->rom = rom;
     rt->rom_size = size;
+    gba_save_init(rt);
     if (size != gba_rom_size || gba_crc32(rom, size) != gba_rom_crc32) {
         snprintf(rt->error, sizeof rt->error,
                  "this build was recompiled from a different ROM (want %u bytes with CRC32 "
@@ -88,8 +89,13 @@ GbaEnd gba_run(GbaRuntime *rt)
         }
         if (!rt->resetting)
             return rt->end;
+        if (rt->resetting == 2) {  /* HardReset: as if switched off and on (saves stay) */
+            power_on(rt);
+            entry = gba_rom_entry;
+        } else {
+            entry = soft_reset(rt);
+        }
         rt->resetting = 0;
-        entry = soft_reset(rt);
     }
 }
 
@@ -102,6 +108,12 @@ void gba_end(GbaRuntime *rt, GbaEnd why)
 void gba_reset(GbaRuntime *rt)
 {
     rt->resetting = 1;
+    longjmp(rt->end_jump, 1);
+}
+
+void gba_hard_reset(GbaRuntime *rt)
+{
+    rt->resetting = 2;
     longjmp(rt->end_jump, 1);
 }
 

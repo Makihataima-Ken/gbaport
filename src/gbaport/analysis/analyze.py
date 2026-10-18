@@ -12,6 +12,7 @@ from gbaport.analysis.traces import Trace, TraceError, targets_by_site
 from gbaport.isa.model import Mode
 from gbaport.rom.image import HEADER_SIZE, ROM_BASE, RomImage
 from gbaport.rom.info import RomInfo, inspect_rom
+from gbaport.rom.savetype import SaveType
 
 FORMAT = "gbaport-analysis/1"
 RAM_REGIONS = ((0x02000000, 0x02040000), (0x03000000, 0x03008000))  # EWRAM, IWRAM
@@ -38,6 +39,7 @@ class Analysis:
     coverage: Coverage
     ram_code: tuple[RamCode, ...] = ()  # every overlay used: configured, then detected
     detected: tuple[RamCode, ...] = ()  # copies the analysis found and adopted itself
+    save: SaveType = SaveType.NONE  # game.toml's [rom] save, else the ROM's library ID
 
 
 def analyze_rom(
@@ -72,7 +74,9 @@ def analyze_rom(
         detected += found
     coverage = _coverage(space, exploration, config)
     program = build_program(exploration)
-    return Analysis(info, exploration, program, coverage, config.ram_code + detected, detected)
+    save = config.save or info.save.save_type
+    ram_code = config.ram_code + detected
+    return Analysis(info, exploration, program, coverage, ram_code, detected, save)
 
 
 def _copied_code(

@@ -5,7 +5,6 @@
  * - bios_math.c: Div, DivArm, Sqrt, ArcTan, ArcTan2, MidiKey2Freq;
  * - bios_memory.c: CpuSet, CpuFastSet, BitUnPack, BgAffineSet, ObjAffineSet;
  * - bios_decompress.c: the LZ77, Huffman, run-length and difference decompressors.
- * Any other BIOS function ends the run with an error that names it, for now.
  * The sound driver calls (0x1A-0x1E, 0x20-0x24, 0x28-0x2A) are ignored with a warning
  * until sound arrives. Numbers above 0x2A do not exist in the BIOS; they are ignored with
  * a warning too. */
@@ -110,6 +109,7 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
         break;
     case 0x1F: gba_bios_midi_key_to_freq(rt); break;
     case 0x25: ctx->r[0] = 1; break;  /* MultiBoot fails: there is no link cable */
+    case 0x26: gba_hard_reset(rt); break;
     case 0x27:  /* CustomHalt: r2's low byte goes to HALTCNT */
         if (ctx->r[2] & 0x80)
             gba_end(rt, GBA_END_STOPPED);
@@ -123,8 +123,6 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
                       (unsigned)number);
         break;
     default:
-        if (number <= 0x2A)
-            gba_fail(rt, "BIOS function 0x%02x is not implemented yet", (unsigned)number);
         gba_warn_once(rt, GBA_WARN_SWI, "ignoring SWI 0x%02x: the BIOS has no such function",
                       (unsigned)number);
         break;

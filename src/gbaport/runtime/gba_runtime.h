@@ -57,6 +57,19 @@ typedef enum {  /* runtime warnings, each reported once a run */
     GBA_WARN_SOUND = 1 << 3,         /* the BIOS sound driver, not implemented yet */
 } GbaWarning;
 
+typedef enum {  /* the cartridge's save chip; gba_rom.c gives the game's */
+    GBA_SAVE_NONE, GBA_SAVE_SRAM, GBA_SAVE_FLASH64K, GBA_SAVE_FLASH128K, GBA_SAVE_EEPROM,
+} GbaSaveType;
+
+typedef struct {
+    GbaSaveType type;
+    uint8_t data[0x20000];  /* the chip's contents (0xFF when blank) */
+    uint32_t size;          /* bytes in use; for EEPROM 0 until its size is known */
+    int dirty;              /* written since the host last stored it */
+    int flash_step, flash_id_mode, flash_erase, flash_write, flash_bank_select;
+    uint32_t flash_bank;
+} GbaSave;
+
 typedef struct GbaRuntime GbaRuntime;
 
 typedef struct {
@@ -98,13 +111,14 @@ struct GbaRuntime {
     GbaTimer timer[4];
     GbaDma dma[4];
     uint16_t keys_pressed;               /* GBA key bits, 1 = pressed */
+    GbaSave save;
 
     char debug_text[0x101];
     int debug_enabled;
     unsigned warned;  /* GbaWarning bits already reported */
 
     jmp_buf end_jump;
-    int resetting;
+    int resetting;    /* 1 = SoftReset, 2 = HardReset */
     GbaEnd end;
     char error[256];
 };
@@ -113,6 +127,7 @@ struct GbaRuntime {
 extern const uint32_t gba_rom_entry;  /* where the cartridge's entry branch leads */
 extern const uint32_t gba_rom_size;
 extern const uint32_t gba_rom_crc32;
+extern const uint32_t gba_save_type;  /* a GbaSaveType */
 GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr);
 
 /* For the host. */
@@ -121,11 +136,16 @@ GbaEnd gba_run(GbaRuntime *rt);
 void gba_end(GbaRuntime *rt, GbaEnd why);  /* from a callback: ends gba_run */
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed);
 uint32_t gba_crc32(const uint8_t *data, uint32_t size);
+uint8_t *gba_save_data(GbaRuntime *rt, uint32_t *size);  /* size 0: nothing to store */
+int gba_save_dirty(const GbaRuntime *rt);
+void gba_save_stored(GbaRuntime *rt);
+int gba_save_load(GbaRuntime *rt, const uint8_t *data, uint32_t size);  /* before gba_run */
 
 /* Inside the runtime. */
 static inline GbaRuntime *gba_rt(GbaCtx *ctx) { return (GbaRuntime *)ctx->runtime; }
 void gba_fail(GbaRuntime *rt, const char *fmt, ...);  /* runtime error: ends the run */
 void gba_reset(GbaRuntime *rt);                       /* SoftReset: restarts gba_run */
+void gba_hard_reset(GbaRuntime *rt);                  /* HardReset: power on again */
 void gba_warn_once(GbaRuntime *rt, GbaWarning kind, const char *fmt, ...);
 void gba_reset_io(GbaRuntime *rt);
 
@@ -156,6 +176,10 @@ void gba_bios_lz77(GbaRuntime *rt, int halfwords);
 void gba_bios_rl(GbaRuntime *rt, int halfwords);
 void gba_bios_diff(GbaRuntime *rt, int unit, int halfwords);
 void gba_bios_huffman(GbaRuntime *rt);
+
+void gba_save_init(GbaRuntime *rt);
+uint32_t gba_save_read8(GbaRuntime *rt, uint32_t addr);   /* 0x0E000000-0x0FFFFFFF */
+void gba_save_write8(GbaRuntime *rt, uint32_t addr, uint32_t value);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

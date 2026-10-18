@@ -211,7 +211,7 @@ def _recompile(args: argparse.Namespace, rom: RomImage, out: Path) -> None:
     """Analyse and lift ``rom``, write its C sources to ``out`` and report."""
     analysis = _analyse(args, rom)
     lifted = lift_program(analysis.program, analysis.exploration)
-    files = generated_sources(lifted, rom.data)
+    files = generated_sources(lifted, rom.data, analysis.save)
     write_sources(files, out)
     lines = sum(text.count("\n") for name, text in files.items() if name != HEADER)
     print(f"{'functions':<13}{len(lifted.functions)}")

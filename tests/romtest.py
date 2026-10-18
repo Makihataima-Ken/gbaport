@@ -157,7 +157,8 @@ def native_program(rom: TestRom) -> Path:
     """Recompile ``rom`` and build it with the headless host (cached by the C sources)."""
     image = RomImage(rom.data)
     analysis = analyze_rom(image, parse_config(rom.config), ())
-    files = native.generated_sources(lift_program(analysis.program, analysis.exploration), rom.data)
+    lifted = lift_program(analysis.program, analysis.exploration)
+    files = native.generated_sources(lifted, rom.data, analysis.save)
     runtime = [path.read_bytes() for path in sorted(native.RUNTIME.glob("*.[ch]"))]
     flags = " ".join([*native.CFLAGS, *native.RUNTIME_SOURCES])
     sources = (f"{name}\n{text}" for name, text in sorted(files.items()))
@@ -183,14 +184,22 @@ def run_program(command: list[str]) -> subprocess.CompletedProcess:
     raise AssertionError("unreachable")
 
 
-def run_rom(rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None) -> Run:
-    """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set)."""
+def run_rom(
+    rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None
+) -> Run:
+    """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set).
+
+    The game's save file is ``save``; without one, every run starts with a blank save.
+    """
     program = native_program(rom)
     path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
     path.write_bytes(rom_file or rom.data)
-    result = run_program([str(program), str(path), "--frames", str(frames)])
+    with tempfile.TemporaryDirectory() as scratch:
+        save_path = save or Path(scratch) / "game.sav"
+        command = [str(program), str(path), "--frames", str(frames), "--save", str(save_path)]
+        result = run_program(command)
     return Run(result.returncode, tuple(result.stdout.splitlines()), result.stderr)
 
 
-def run_test(name: str, *, frames: int = 600, data: str = "") -> Run:
-    return run_rom(build_test_rom(name, data), frames=frames)
+def run_test(name: str, *, frames: int = 600, data: str = "", save: Path | None = None) -> Run:
+    return run_rom(build_test_rom(name, data), frames=frames, save=save)

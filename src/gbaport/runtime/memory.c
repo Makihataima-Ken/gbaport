@@ -5,7 +5,8 @@
  * Byte writes follow the hardware: palette and BG VRAM write the byte to both halves of
  * the halfword, OBJ VRAM and OAM ignore them. Reads past the end of the ROM return the
  * cartridge bus's open-bus pattern (each halfword reads as its address / 2); other
- * unmapped reads return 0. */
+ * unmapped reads return 0. The save chip (save.c) answers at 0x0E000000-0x0FFFFFFF on
+ * an 8-bit bus (wider reads repeat the byte). */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -49,6 +50,7 @@ static const uint8_t *rom_at(const GbaRuntime *rt, uint32_t addr, uint32_t size)
 }
 
 static int is_rom(uint32_t addr) { return addr >= 0x08000000u && addr < 0x0E000000u; }
+static int is_save(uint32_t addr) { return addr >= 0x0E000000u && addr < 0x10000000u; }
 
 /* ---- the mGBA debug log ------------------------------------------------------------ */
 
@@ -83,6 +85,8 @@ uint32_t gba_read16(GbaCtx *ctx, uint32_t addr)
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return get16(mem + offset);
+    if (is_save(addr))
+        return gba_save_read8(rt, addr) * 0x0101u;
     const uint8_t *rom = rom_at(rt, addr, 2);
     if (rom)
         return get16(rom);
@@ -107,6 +111,8 @@ uint32_t gba_read8(GbaCtx *ctx, uint32_t addr)
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return mem[offset];
+    if (is_save(addr))
+        return gba_save_read8(rt, addr);
     const uint8_t *rom = rom_at(rt, addr, 1);
     if (rom)
         return *rom;
@@ -120,6 +126,8 @@ uint32_t gba_read32(GbaCtx *ctx, uint32_t addr)
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return get32(mem + offset);
+    if (is_save(addr))
+        return gba_save_read8(rt, addr) * 0x01010101u;
     const uint8_t *rom = rom_at(rt, addr, 4);  /* literal pools: the most common case */
     if (rom)
         return get32(rom);
@@ -136,6 +144,10 @@ static void write16(GbaRuntime *rt, uint32_t addr, uint32_t value, uint16_t mask
             gba_io_write(rt, addr & 0x3FE, (uint16_t)value, mask);
         else if (is_debug(addr) && mask == 0xFFFF)  /* bytes reach the string only */
             debug_write16(rt, addr, value);
+        break;
+    case 0x0E:
+    case 0x0F:
+        gba_save_write8(rt, addr, value);  /* the 8-bit bus takes the low byte */
         break;
     default:
         break;  /* BIOS and ROM are read-only; nothing else is mapped */
@@ -182,6 +194,10 @@ void gba_write8(GbaCtx *ctx, uint32_t addr, uint32_t value)
         return;
     }
     case 0x07: return;  /* OAM ignores byte writes */
+    case 0x0E:
+    case 0x0F:
+        gba_save_write8(rt, addr, value);
+        return;
     default: {
         int high = addr & 1;
         if (is_debug(addr) && addr < DEBUG_FLAGS) {
