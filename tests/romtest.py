@@ -105,19 +105,25 @@ def _with_header(image: bytes) -> bytes:
     return bytes(rom)
 
 
-def build_test_rom(name: str) -> TestRom:
-    """Compile ``gbaroms/<name>.c`` with crt0 and testlib into a ROM and its game.toml."""
+def build_test_rom(name: str, data: str = "") -> TestRom:
+    """Compile ``gbaroms/<name>.c`` with crt0 and testlib into a ROM and its game.toml.
+
+    ``data`` becomes ``testdata.h``, which the test file may include: inputs and expected
+    results that the Python tests compute (with ``biosref``, for example).
+    """
     sources = [ROMS / "crt0.s", ROMS / "testlib.c", ROMS / f"{name}.c"]
     inputs = [ROMS / "gba.ld", ROMS / "testlib.h", *sources]
-    folder = CACHE / "roms" / _digest(*(path.read_bytes() for path in inputs), *CFLAGS)
+    folder = CACHE / "roms" / _digest(*(path.read_bytes() for path in inputs), *CFLAGS, data)
     rom_path, config_path = folder / "game.gba", folder / "game.toml"
     if not rom_path.exists():
         folder.mkdir(parents=True, exist_ok=True)
+        (folder / "testdata.h").write_text(data, encoding="utf-8")
         objects = []
         for source in sources:
             obj = folder / f"{source.stem}.o"
             flags = TARGET if source.suffix == ".s" else CFLAGS
-            _run([find_clang(), *flags, f"-I{ROMS}", "-c", str(source), "-o", str(obj)])
+            includes = [f"-I{ROMS}", f"-I{folder}"]
+            _run([find_clang(), *flags, *includes, "-c", str(source), "-o", str(obj)])
             objects.append(str(obj))
         elf = folder / "game.elf"
         _run([llvm_tool("ld.lld"), "-T", str(ROMS / "gba.ld"), *objects, "-o", str(elf)])
@@ -186,5 +192,5 @@ def run_rom(rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None) -
     return Run(result.returncode, tuple(result.stdout.splitlines()), result.stderr)
 
 
-def run_test(name: str, *, frames: int = 600) -> Run:
-    return run_rom(build_test_rom(name), frames=frames)
+def run_test(name: str, *, frames: int = 600, data: str = "") -> Run:
+    return run_rom(build_test_rom(name, data), frames=frames)

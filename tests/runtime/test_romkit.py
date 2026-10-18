@@ -1,4 +1,4 @@
-from romtest import build_test_rom
+from romtest import build_test_rom, run_test
 
 from gbaport.analysis.config import parse_config
 from gbaport.rom.header import parse_header
@@ -22,3 +22,9 @@ def test_the_config_lists_every_function_and_the_iwram_code():
     (blob,) = config.ram_code
     assert (blob.ram, blob.mode.value) == (0x03000000, "arm")
     assert 0x08000000 < blob.rom < 0x08010000 and blob.size > 0
+
+
+def test_a_test_rom_can_include_data_from_python():
+    run = run_test("data_echo", data='#define ECHO "made in Python"\n')
+    assert run.lines[0] == "made in Python"
+    run.assert_passed()
