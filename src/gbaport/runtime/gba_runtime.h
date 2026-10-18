@@ -147,6 +147,11 @@ void gba_bios_sqrt(GbaRuntime *rt);
 void gba_bios_arctan(GbaRuntime *rt);
 void gba_bios_arctan2(GbaRuntime *rt);
 void gba_bios_midi_key_to_freq(GbaRuntime *rt);
+void gba_bios_cpu_set(GbaRuntime *rt);
+void gba_bios_cpu_fast_set(GbaRuntime *rt);
+void gba_bios_bit_unpack(GbaRuntime *rt);
+void gba_bios_bg_affine_set(GbaRuntime *rt);
+void gba_bios_obj_affine_set(GbaRuntime *rt);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

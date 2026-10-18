@@ -2,7 +2,8 @@
  *
  * gba_swi dispatches every call. This file has the ones that control the CPU (resets,
  * Halt, Stop, the interrupt waits) and the small ones; the others are in
- * - bios_math.c: Div, DivArm, Sqrt, ArcTan, ArcTan2, MidiKey2Freq.
+ * - bios_math.c: Div, DivArm, Sqrt, ArcTan, ArcTan2, MidiKey2Freq;
+ * - bios_memory.c: CpuSet, CpuFastSet, BitUnPack, BgAffineSet, ObjAffineSet.
  * Any other BIOS function ends the run with an error that names it, for now.
  * The sound driver calls (0x1A-0x1E, 0x20-0x24, 0x28-0x2A) are ignored with a warning
  * until sound arrives. Numbers above 0x2A do not exist in the BIOS; they are ignored with
@@ -89,7 +90,12 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
     case 0x08: gba_bios_sqrt(rt); break;
     case 0x09: gba_bios_arctan(rt); break;
     case 0x0A: gba_bios_arctan2(rt); break;
+    case 0x0B: gba_bios_cpu_set(rt); break;
+    case 0x0C: gba_bios_cpu_fast_set(rt); break;
     case 0x0D: ctx->r[0] = 0xBAAE187Fu; break;  /* GetBiosChecksum */
+    case 0x0E: gba_bios_bg_affine_set(rt); break;
+    case 0x0F: gba_bios_obj_affine_set(rt); break;
+    case 0x10: gba_bios_bit_unpack(rt); break;
     case 0x19:  /* SoundBias: straight to the target level */
         IO(rt, 0x088) = (uint16_t)((IO(rt, 0x088) & 0xC000) | (ctx->r[0] ? 0x200 : 0));
         break;
