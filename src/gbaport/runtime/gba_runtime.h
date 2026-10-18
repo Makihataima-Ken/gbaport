@@ -68,6 +68,11 @@ typedef struct {
     int dirty;              /* written since the host last stored it */
     int flash_step, flash_id_mode, flash_erase, flash_write, flash_bank_select;
     uint32_t flash_bank;
+    int eeprom_address_bits;  /* 6 (512 bytes) or 14 (8 KiB) */
+    uint8_t eeprom_in[96];    /* request bits received so far */
+    uint32_t eeprom_count;
+    uint64_t eeprom_out;      /* the block being read out */
+    uint32_t eeprom_out_left; /* bits still to come: 4 ignored, then 64 */
 } GbaSave;
 
 typedef struct GbaRuntime GbaRuntime;
@@ -180,6 +185,10 @@ void gba_bios_huffman(GbaRuntime *rt);
 void gba_save_init(GbaRuntime *rt);
 uint32_t gba_save_read8(GbaRuntime *rt, uint32_t addr);   /* 0x0E000000-0x0FFFFFFF */
 void gba_save_write8(GbaRuntime *rt, uint32_t addr, uint32_t value);
+int gba_save_is_eeprom(const GbaRuntime *rt, uint32_t addr);
+void gba_eeprom_dma(GbaRuntime *rt, uint32_t count);      /* a DMA of count halfwords starts */
+uint32_t gba_eeprom_read(GbaRuntime *rt);
+void gba_eeprom_write(GbaRuntime *rt, uint32_t value);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

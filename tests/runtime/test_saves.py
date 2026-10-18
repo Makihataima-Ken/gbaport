@@ -37,6 +37,13 @@ def test_flash_works_and_its_save_file_persists(tmp_path, flash_id, chip, banks,
     assert data[0x100:0x108] == SIGNATURE
 
 
+@pytest.mark.parametrize("bits,size", [(6, 0x200), (14, 0x2000)])
+def test_eeprom_works_and_its_size_follows_the_dma_length(tmp_path, bits, size):
+    data = _twice("save_eeprom", tmp_path / "game.sav", f"#define EEPROM_BITS {bits}\n")
+    assert len(data) == size
+    assert data[5 * 8 : 6 * 8] == SIGNATURE
+
+
 def test_a_save_file_of_another_size_is_left_alone(tmp_path):
     save = tmp_path / "game.sav"
     save.write_bytes(bytes(100))

@@ -6,7 +6,7 @@
  * the halfword, OBJ VRAM and OAM ignore them. Reads past the end of the ROM return the
  * cartridge bus's open-bus pattern (each halfword reads as its address / 2); other
  * unmapped reads return 0. The save chip (save.c) answers at 0x0E000000-0x0FFFFFFF on
- * an 8-bit bus (wider reads repeat the byte). */
+ * an 8-bit bus (wider reads repeat the byte), and an EEPROM at 0x0D000000. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -85,6 +85,8 @@ uint32_t gba_read16(GbaCtx *ctx, uint32_t addr)
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return get16(mem + offset);
+    if (gba_save_is_eeprom(rt, addr))
+        return gba_eeprom_read(rt);
     if (is_save(addr))
         return gba_save_read8(rt, addr) * 0x0101u;
     const uint8_t *rom = rom_at(rt, addr, 2);
@@ -144,6 +146,10 @@ static void write16(GbaRuntime *rt, uint32_t addr, uint32_t value, uint16_t mask
             gba_io_write(rt, addr & 0x3FE, (uint16_t)value, mask);
         else if (is_debug(addr) && mask == 0xFFFF)  /* bytes reach the string only */
             debug_write16(rt, addr, value);
+        break;
+    case 0x0D:
+        if (gba_save_is_eeprom(rt, addr))
+            gba_eeprom_write(rt, value);
         break;
     case 0x0E:
     case 0x0F:

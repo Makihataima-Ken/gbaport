@@ -44,6 +44,8 @@ static void run(GbaRuntime *rt, int n)
     if (d->src >= 0x08000000u && d->src < 0x0E000000u && src_control == 1)
         src_control = 0;  /* the cartridge bus cannot count down */
     int32_t dst_step = step(dst_control, size), src_step = step(src_control, size);
+    if (gba_save_is_eeprom(rt, d->dst) || gba_save_is_eeprom(rt, d->src))
+        gba_eeprom_dma(rt, d->count);  /* the length tells the EEPROM's size */
     for (uint32_t i = 0; i < d->count; i++) {
         if (size == 4)
             gba_write32(ctx, d->dst & ~3u, gba_read32(ctx, d->src & ~3u));
