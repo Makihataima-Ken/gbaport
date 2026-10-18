@@ -21,6 +21,7 @@ dev = [
     { name = "keystone-engine" },
     { name = "pytest" },
     { name = "ruff" },
+    { name = "unicorn" },
 ]
 
 [package.metadata]
@@ -30,6 +31,7 @@ dev = [
     { name = "keystone-engine", specifier = "==0.9.2" },
     { name = "pytest", specifier = ">=8.3" },
     { name = "ruff", specifier = ">=0.7" },
+    { name = "unicorn", specifier = "==2.1.3" },
 ]
 
 [[package]]
@@ -120,4 +122,21 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/0a/e8/1e186578076aff7a80735f625005fde678412ab609cd323ed182eb7d6b87/ruff-0.17.1-py3-none-win32.whl", hash = "sha256:1de0030a8aa78c65c5fecb84b2e5c390ac684c0452875a02afc7c083d49a496a", size = 9895093, upload-time = "2026-10-15T15:23:10.582Z" },
     { url = "https://files.pythonhosted.org/packages/6a/2e/da3d9589bae8e8b58f3a48bd5bc0b980232fb14a83bf02c3be7660f87c1b/ruff-0.17.1-py3-none-win_amd64.whl", hash = "sha256:5df76f16580fab58d0f6c98a3ac254a4abceb7b2489b8b678335869cff77b3d7", size = 10097955, upload-time = "2026-10-15T15:23:13.309Z" },
     { url = "https://files.pythonhosted.org/packages/df/c9/0f2a4dea06a5e12c1191ee3d96b1e1233797d0d5e18f97a2b909a95a9836/ruff-0.17.1-py3-none-win_arm64.whl", hash = "sha256:42400b9a6ff8515ff27796f07f92e0195be011c86e81e381606f58ea5502fef4", size = 9853542, upload-time = "2026-10-15T15:23:16.05Z" },
+]
+
+[[package]]
+name = "unicorn"
+version = "2.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/51/40/52d9961c488d9a45c7ed26f76b50e70f0d562d7fafd936121303cc7500ad/unicorn-2.1.3.tar.gz", hash = "sha256:0c06456cf550c228f2003cc70366afa4aece2e6e7e4c32d8f4b22c717ba6b729", size = 2860875, upload-time = "2025-03-07T12:51:40.23Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a1/5b/d30bfab4577adbf8e7838637f22ae2353b06cf7f743152debf25f6e3219b/unicorn-2.1.3-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:e86b20464b1332248b22185b06fe5a56d4913648f9a41e7286ca83b3fc443747", size = 12901727, upload-time = "2025-03-07T12:50:02.515Z" },
+    { url = "https://files.pythonhosted.org/packages/d6/31/d15f3217a26c9defd1aa1bc23b9dfde64a7a04c21d28e4d46670d329612f/unicorn-2.1.3-cp313-cp313-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:cea0462b08e94a6b5764692b47ffa6bf2cb6d47fecd6939c874da5165dbd4ba6", size = 15310145, upload-time = "2025-03-07T12:50:04.267Z" },
+    { url = "https://files.pythonhosted.org/packages/cf/83/1eac513d57de232570be624cfc4ee6ea5d9ee370a7e795e7d1a2e9bd4562/unicorn-2.1.3-cp313-cp313-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:67d0462f66ba961079728ff74eaf8233fba48dadea80313c0dad5ac4ba8a80be", size = 19753425, upload-time = "2025-03-07T12:50:06.582Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/45/d9902bef41673c8de08bd7bc0ee8756e5afa982264d84997eb8f4b4c6984/unicorn-2.1.3-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:dabf178a2ad5894556258d38ed9d9b9c3adca4ced10ee3d3ace772b47d02b1c8", size = 16350568, upload-time = "2025-03-07T12:50:08.556Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/c0/bf271847a4193fd1ccdcdf0ba30067c37b3b2de66254153366d396e014b1/unicorn-2.1.3-cp313-cp313-musllinux_1_2_aarch64.whl", hash = "sha256:cc9d2b422993baa314c124f81918b9be5fb814301c8dd48a3c2b91c847951936", size = 15854996, upload-time = "2025-03-07T12:50:10.891Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/9c/0e88e751e52b87301d924ed054ac647afe3ed570d5a0bdbb5d35fdb616bb/unicorn-2.1.3-cp313-cp313-musllinux_1_2_i686.whl", hash = "sha256:f21e05586d48414eb53a8b6a6a79f162d58feffe31a2537816665bf4d0f188ea", size = 20401044, upload-time = "2025-03-07T12:50:13.432Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/ba/626d86da323e4ee99addd0ebbf6a84c591331149155c90f8e50a569fd1b3/unicorn-2.1.3-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:a7d0cb2fd742a0914e3dfb52a41b255bdd31937ab2da449dd750ad4cc0558407", size = 16685422, upload-time = "2025-03-07T12:50:17.127Z" },
+    { url = "https://files.pythonhosted.org/packages/84/5f/118641bb6d34493c9b7cb46e3b0228b168280f9962c06a6be523f3effa47/unicorn-2.1.3-cp313-cp313-win32.whl", hash = "sha256:ff37f0307f78d1fd43420790307d684f36f56d5d8b1ad102986f99bcbfb03ecb", size = 11760195, upload-time = "2025-03-07T12:50:20.282Z" },
+    { url = "https://files.pythonhosted.org/packages/d3/dd/fc08dcabe1b0a38a2d0d560a06213c88fe0b6de09b956273e6800c33210c/unicorn-2.1.3-cp313-cp313-win_amd64.whl", hash = "sha256:1f218e51ed5e9047575ef6200a6acfacf3ee545e3a9df905445a01101399296e", size = 15872963, upload-time = "2025-03-07T12:50:22.159Z" },
 ]
