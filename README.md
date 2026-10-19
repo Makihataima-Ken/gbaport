@@ -21,10 +21,16 @@ The lifter tests compile C with clang (`winget install LLVM.LLVM`) and compare a
 Unicorn; their test binaries are cached in the system temp folder (`gbaport-liftcache`).
 The runtime tests build small GBA test ROMs from C (`tests/gbaroms`) with clang and
 ld.lld, recompile them and run them natively; ROMs and builds are cached in
-`gbaport-romcache`. They also download and run jsmolka's CPU test ROMs (MIT licence;
-`tests/publicroms/jsmolka` has their configs), so the first run needs a network
+`gbaport-romcache`. They also download and run jsmolka's CPU and PPU test ROMs (MIT
+licence; `tests/publicroms/jsmolka` has their configs), so the first run needs a network
 connection. The window tests build SDL3 the first time (see below) and run with SDL's
 dummy video driver, so no window opens.
+
+The renderer tests compare every picture, pixel for pixel, with mGBA's: they build mGBA
+0.10.5's GBA core (MPL-2.0, a development tool only; nothing ships it) from source the
+first time, with the same CMake, Ninja and clang as SDL3, into the same cache folder. A
+picture that differs is written next to mGBA's in `gbaport-romcache/pictures`, and the
+test's message names the file.
 
 ## Commands
 
@@ -49,9 +55,10 @@ the ROM it was built from:
 Keys: arrows, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select. A gamepad
 works too: its right face button is A, the bottom one B. The game runs at the GBA's 59.73
 frames a second (`--fast`: as fast as it can), and the picture grows with the window by
-whole steps (`--scale`: the starting size, 3 by default). Until the renderer arrives
-(Plan 5) only the bitmap modes are drawn; a game that draws with tiles shows its backdrop
-colour. Closing the window ends the run.
+whole steps (`--scale`: the starting size, 3 by default). The renderer draws every
+line as the GBA does (tiled, rotating and bitmap backgrounds, sprites, windows, blending,
+mosaic) from the registers as they are at the end of that line, so effects that change
+them between lines work. Closing the window ends the run.
 
 The first build also builds SDL3 3.4.18 from source, once, into `%LOCALAPPDATA%\gbaport`
 (`GBAPORT_CACHE` moves it). That needs CMake and Ninja (the Visual Studio Build Tools
