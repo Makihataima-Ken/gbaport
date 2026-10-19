@@ -1,5 +1,5 @@
 """Raster effects, compared with mGBA: HBlank DMA writing a scroll register or a colour
-line after line."""
+line after line, and an interrupt switching modes halfway down the screen."""
 
 import pytest
 from rendertest import assert_test_rom_matches
@@ -16,6 +16,7 @@ def raster(dispcnt: int, split: int, target: int) -> str:
 SCENES = {
     "hblank-dma-wave": raster(0x0500, 0, BG0HOFS),
     "hblank-dma-backdrop-colours": raster(0x0100, 0, BACKDROP),
+    "mode-switch-at-line-80": raster(0x0500, 1, BG0HOFS),
 }
 
 

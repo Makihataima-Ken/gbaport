@@ -12,6 +12,10 @@
  * BGnHOFS/BGnVOFS with wrap-around. An entry holds the tile number, flips and (for 16-colour
  * tiles) a palette bank. Tile data past background VRAM (0x10000) is transparent.
  *
+ * Rotation/scaling backgrounds (BG2 in mode 1, BG2 and BG3 in mode 2) are 128 to 1024
+ * pixels square, of 256-colour tiles named by one-byte map entries. Outside the square
+ * they are transparent, or wrap around when BGnCNT bit 13 says so.
+ *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
@@ -102,6 +106,32 @@ static void text_line(const GbaRuntime *rt, int n, int y, uint16_t *out)
     }
 }
 
+/* A rotation/scaling background's line (n = 2 or 3). */
+static void affine_line(const GbaRuntime *rt, int n, uint16_t *out)
+{
+    uint16_t control = IO(rt, 0x08 + 2 * n);
+    uint32_t char_base = ((control >> 2) & 3) * 0x4000u;
+    uint32_t screen_base = ((control >> 8) & 31) * 0x800u;
+    int32_t size = 128 << (control >> 14);  /* pixels each way */
+    int k = n - 2;
+    int32_t x = rt->affine_x[k], y = rt->affine_y[k];
+    int32_t dx = (int16_t)IO(rt, 0x20 + 0x10 * k), dy = (int16_t)IO(rt, 0x24 + 0x10 * k);
+    for (int i = 0; i < W; i++, x += dx, y += dy) {
+        int32_t tx = x >> 8, ty = y >> 8;
+        out[i] = CLEAR;
+        if (control & 0x2000) {  /* wrap around */
+            tx &= size - 1;
+            ty &= size - 1;
+        } else if (tx < 0 || ty < 0 || tx >= size || ty >= size) {
+            continue;
+        }
+        uint32_t tile = rt->vram[screen_base + (uint32_t)((ty >> 3) * (size >> 3) + (tx >> 3))];
+        uint8_t color = rt->vram[char_base + tile * 64 + (uint32_t)((ty & 7) * 8 + (tx & 7))];
+        if (color)
+            out[i] = color_at(rt->palette, color * 2u);
+    }
+}
+
 /* Modes 3-5: BG2 is a bitmap, walked like the rotation/scaling backgrounds. */
 static void bitmap_line(const GbaRuntime *rt, uint16_t *out, uint32_t mode)
 {
@@ -161,6 +191,13 @@ void gba_render_line(GbaRuntime *rt, int y)
         int text = mode == 0 || (mode == 1 && n < 2);
         if (text && (control & (0x100u << n))) {
             text_line(rt, n, y, layers.bg[n]);
+            enabled |= 1u << n;
+        }
+    }
+    for (int n = 2; n < 4; n++) {
+        int affine = (mode == 1 && n == 2) || mode == 2;
+        if (affine && (control & (0x100u << n))) {
+            affine_line(rt, n, layers.bg[n]);
             enabled |= 1u << n;
         }
     }
