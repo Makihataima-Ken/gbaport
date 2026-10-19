@@ -57,7 +57,7 @@ void gba_write8(GbaCtx *ctx, uint32_t addr, uint32_t value) { (void)ctx; *window
 
 void gba_write16(GbaCtx *ctx, uint32_t addr, uint32_t value)
 {
-    uint8_t *p = window(addr, 2, 1);
+    uint8_t *p = window(addr & ~1u, 2, 1);  /* stores arrive with the whole address */
     (void)ctx;
     p[0] = (uint8_t)value;
     p[1] = (uint8_t)(value >> 8);
@@ -65,7 +65,7 @@ void gba_write16(GbaCtx *ctx, uint32_t addr, uint32_t value)
 
 void gba_write32(GbaCtx *ctx, uint32_t addr, uint32_t value)
 {
-    uint8_t *p = window(addr, 4, 1);
+    uint8_t *p = window(addr & ~3u, 4, 1);
     (void)ctx;
     for (int i = 0; i < 4; i++)
         p[i] = (uint8_t)(value >> (8 * i));

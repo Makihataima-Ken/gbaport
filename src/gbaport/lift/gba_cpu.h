@@ -220,8 +220,9 @@ static inline uint32_t gba_ldrsh(GbaCtx *ctx, uint32_t addr)
     return (uint32_t)(int32_t)(int16_t)gba_read16(ctx, addr);
 }
 
-static inline void gba_str(GbaCtx *ctx, uint32_t addr, uint32_t v) { gba_write32(ctx, addr & ~3u, v); }
-static inline void gba_strh(GbaCtx *ctx, uint32_t addr, uint32_t v) { gba_write16(ctx, addr & ~1u, v & 0xFFFF); }
+/* Stores pass the whole address: the memory rounds it down, except on the save chip's bus. */
+static inline void gba_str(GbaCtx *ctx, uint32_t addr, uint32_t v) { gba_write32(ctx, addr, v); }
+static inline void gba_strh(GbaCtx *ctx, uint32_t addr, uint32_t v) { gba_write16(ctx, addr, v & 0xFFFF); }
 static inline void gba_strb(GbaCtx *ctx, uint32_t addr, uint32_t v) { gba_write8(ctx, addr, v & 0xFF); }
 
 /* ---- modes, banked registers, CPSR and SPSR ------------------------------------ */

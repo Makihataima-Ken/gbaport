@@ -1,12 +1,14 @@
 /* memory.c - the GBA memory map behind gba_read8/16/32 and gba_write8/16/32.
  *
- * Addresses arrive aligned to the access size (gba_cpu.h applies the ARM7TDMI rules for
- * misaligned loads and stores first). Every region mirrors across its 16 MiB page.
+ * 16- and 32-bit accesses use the address rounded down to their size, as the buses do;
+ * only the save chip sees the whole address of a store (gba_cpu.h applies the ARM7TDMI's
+ * rotation of misaligned loads). Every region mirrors across its 16 MiB page.
  * Byte writes follow the hardware: palette and BG VRAM write the byte to both halves of
  * the halfword, OBJ VRAM and OAM ignore them. Reads past the end of the ROM return the
  * cartridge bus's open-bus pattern (each halfword reads as its address / 2); other
  * unmapped reads return 0. The save chip (save.c) answers at 0x0E000000-0x0FFFFFFF on
- * an 8-bit bus (wider reads repeat the byte), and an EEPROM at 0x0D000000. */
+ * an 8-bit bus: wider reads repeat the byte, and wider stores write the one byte of the
+ * value that lines up with the address. An EEPROM answers at 0x0D000000. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -82,6 +84,7 @@ uint32_t gba_read16(GbaCtx *ctx, uint32_t addr)
 {
     GbaRuntime *rt = gba_rt(ctx);
     uint32_t offset;
+    addr &= ~1u;
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return get16(mem + offset);
@@ -125,6 +128,7 @@ uint32_t gba_read32(GbaCtx *ctx, uint32_t addr)
 {
     GbaRuntime *rt = gba_rt(ctx);
     uint32_t offset;
+    addr &= ~3u;
     uint8_t *mem = plain(rt, addr, &offset);
     if (mem)
         return get32(mem + offset);
@@ -164,23 +168,27 @@ void gba_write16(GbaCtx *ctx, uint32_t addr, uint32_t value)
 {
     GbaRuntime *rt = gba_rt(ctx);
     uint32_t offset;
-    uint8_t *mem = plain(rt, addr, &offset);
+    uint8_t *mem = plain(rt, addr & ~1u, &offset);
     if (mem)
         put16(mem + offset, value);
+    else if (is_save(addr))
+        gba_save_write8(rt, addr, value >> (addr & 1) * 8);
     else
-        write16(rt, addr, value & 0xFFFF, 0xFFFF);
+        write16(rt, addr & ~1u, value & 0xFFFF, 0xFFFF);
 }
 
 void gba_write32(GbaCtx *ctx, uint32_t addr, uint32_t value)
 {
     GbaRuntime *rt = gba_rt(ctx);
     uint32_t offset;
-    uint8_t *mem = plain(rt, addr, &offset);
+    uint8_t *mem = plain(rt, addr & ~3u, &offset);
     if (mem) {
         put32(mem + offset, value);
+    } else if (is_save(addr)) {
+        gba_save_write8(rt, addr, value >> (addr & 3) * 8);
     } else {
-        write16(rt, addr, value & 0xFFFF, 0xFFFF);
-        write16(rt, addr + 2, value >> 16, 0xFFFF);
+        write16(rt, addr & ~3u, value & 0xFFFF, 0xFFFF);
+        write16(rt, (addr & ~3u) + 2, value >> 16, 0xFFFF);
     }
 }
 
