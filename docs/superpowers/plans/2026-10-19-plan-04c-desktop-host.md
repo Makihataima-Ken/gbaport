@@ -166,6 +166,8 @@ def build(source: str) -> Path:
 
 In `tests/liftkit.py`, replace:
 ```python
+        digest.update(text.encode())
+    folder = CACHE / digest.hexdigest()[:16]
     exe = folder / "lifthost.exe"
     if exe.exists():
         return exe
@@ -179,9 +181,14 @@ In `tests/liftkit.py`, replace:
     if result.returncode != 0:
         raise RuntimeError(f"clang failed:\n{result.stderr[-4000:]}")
     return exe
+
+
+def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:
 ```
 with:
 ```python
+        digest.update(text.encode())
+    folder = CACHE / digest.hexdigest()[:16]
     exe = folder / "lifthost.exe"
     if (folder / "started").exists():  # written once Windows let it start
         return exe
@@ -201,6 +208,9 @@ with:
             (folder / "started").write_text("", encoding="utf-8")
             return exe
     raise RuntimeError(f"Windows refused to start {exe} after {native.SALTED_REBUILDS} rebuilds")
+
+
+def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:
 ```
 
 - [ ] **Step 5: Run the whole suite**
@@ -497,12 +507,18 @@ with:
 
 In `src/gbaport/runtime/host_headless.c`, replace:
 ```c
+static unsigned long frame_limit;
 static char save_path[1024];
+
+/* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 ```
 with:
 ```c
+static unsigned long frame_limit;
 static char save_path[1024];
 static int registers;
+
+/* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 ```
 
 In `src/gbaport/runtime/host_headless.c`, replace:
@@ -953,15 +969,21 @@ def test_an_ldm_with_an_empty_register_list_loads_r15_and_moves_the_base_by_0x40
 
 In `tests/lift/test_program.py`, replace:
 ```python
+from gbaport.analysis.discover import explore
 from gbaport.isa.model import Mode
 from gbaport.lift.program import lift_program, program_files, single_source
+
+# Two functions without calls, both given as seeds.   c0 first   c8 second
 ```
 with:
 ```python
+from gbaport.analysis.discover import explore
 from gbaport.isa.model import Mode
 from gbaport.lift import function
 from gbaport.lift.program import lift_program, program_files, single_source
 from gbaport.lift.semantics import LiftError
+
+# Two functions without calls, both given as seeds.   c0 first   c8 second
 ```
 
 In `tests/lift/test_program.py`, replace:
@@ -991,12 +1013,18 @@ def test_an_instruction_c_cannot_express_is_reported(monkeypatch):
 
 In `tests/liftkit.py`, replace:
 ```python
+    ewram: bytes = bytes(WINDOW)
     iwram: bytes = bytes(WINDOW)
+
+    @property
 ```
 with:
 ```python
+    ewram: bytes = bytes(WINDOW)
     iwram: bytes = bytes(WINDOW)
     entries: tuple[int, ...] = ()  # more functions to recompile (in the case's state)
+
+    @property
 ```
 
 In `tests/liftkit.py`, replace:
@@ -1307,12 +1335,18 @@ with:
 
 In `src/gbaport/runtime/host_headless.c`, replace:
 ```c
+static char save_path[1024];
 static int registers;
+
+/* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 ```
 with:
 ```c
+static char save_path[1024];
 static int registers;
 static const char *screenshot;
+
+/* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 ```
 
 In `src/gbaport/runtime/host_headless.c`, replace:
@@ -1673,13 +1707,19 @@ GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # pl
 
 In `src/gbaport/native/build.py`, replace:
 ```python
+    objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
     units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in RUNTIME_SOURCES), RUNTIME / HOSTS[host]]
+
+    def compile_unit(unit: Path) -> Path:
 ```
 with:
 ```python
+    objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
     units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in (*RUNTIME_SOURCES, *HOSTS[host]))]
+
+    def compile_unit(unit: Path) -> Path:
 ```
 
 In `src/gbaport/runtime/bios.c`, replace:
@@ -1753,13 +1793,19 @@ with:
 
 In `src/gbaport/runtime/gba_runtime.h`, replace:
 ```c
+void gba_irq_changed(GbaRuntime *rt);      /* IE, IF or IME written */
 void gba_halt(GbaRuntime *rt);             /* until IE & IF, then deliver the interrupt */
+
+void gba_timer_write(GbaRuntime *rt, int n, uint16_t control);
 ```
 with:
 ```c
+void gba_irq_changed(GbaRuntime *rt);      /* IE, IF or IME written */
 void gba_halt(GbaRuntime *rt);             /* until IE & IF, then deliver the interrupt */
 void gba_stop(GbaRuntime *rt);             /* until a key wakes the game (host.stopped) */
 void gba_keypad_check(GbaRuntime *rt);     /* may request the keypad interrupt */
+
+void gba_timer_write(GbaRuntime *rt, int n, uint16_t control);
 ```
 
 Create `src/gbaport/runtime/host_common.c`:
@@ -2232,17 +2278,23 @@ with:
 
 In `src/gbaport/runtime/runtime.c`, replace:
 ```c
+}
 
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed) { rt->keys_pressed = pressed & 0x3FF; }
+
+/* ---- hooks from gba_cpu.h: what recompiled code cannot handle itself -------------- */
 ```
 with:
 ```c
+}
 
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed)
 {
     rt->keys_pressed = pressed & 0x3FF;
     gba_keypad_check(rt);
 }
+
+/* ---- hooks from gba_cpu.h: what recompiled code cannot handle itself -------------- */
 ```
 
 In `src/gbaport/runtime/scheduler.c`, replace:
@@ -2464,17 +2516,24 @@ with:
 
 In `tests/romtest.py`, replace:
 ```python
+def run_test(
     name: str, *, frames: int = 600, data: str = "", save: Path | None = None,
     args: tuple[str, ...] = (),
 ) -> Run:
     return run_rom(build_test_rom(name, data), frames=frames, save=save, args=args)
+
+def read_bmp(path: Path) -> list[int]:
 ```
 with:
 ```python
+def run_test(
     name: str, *, frames: int = 600, data: str = "", save: Path | None = None,
     host: str = "headless", args: tuple[str, ...] = (),
 ) -> Run:
     return run_rom(build_test_rom(name, data), frames=frames, save=save, host=host, args=args)
+
+
+def read_bmp(path: Path) -> list[int]:
 ```
 
 Create `tests/runtime/test_window.py`:
@@ -3197,20 +3256,27 @@ git commit -m "feat: the window host, with SDL3 built once from source"
 
 In `README.md`, replace:
 ```markdown
+The runtime tests build small GBA test ROMs from C (`tests/gbaroms`) with clang and
 ld.lld, recompile them and run them natively; ROMs and builds are cached in
 `gbaport-romcache`.
+
+## Commands
 ```
 with:
 ```markdown
+The runtime tests build small GBA test ROMs from C (`tests/gbaroms`) with clang and
 ld.lld, recompile them and run them natively; ROMs and builds are cached in
 `gbaport-romcache`. They also download and run jsmolka's CPU test ROMs (MIT licence;
 `tests/publicroms/jsmolka` has their configs), so the first run needs a network
 connection. The window tests build SDL3 the first time (see below) and run with SDL's
 dummy video driver, so no window opens.
+
+## Commands
 ```
 
 In `README.md`, replace:
 ```markdown
+
 `gbaport build` recompiles the game and compiles it with the runtime into
 `games/<game_code>/build/<game_code>.exe`. Run it with the ROM it was built from:
 
@@ -3220,9 +3286,12 @@ It runs without a window for now (the desktop window comes in Plan 4c). Lines th
 prints through mGBA's debug log go to stdout. It exits with 0 when the game executes the
 BIOS Stop call, 2 for bad arguments, a different ROM or an unusable save file, 3 for a
 runtime error, and 4 when `--frames` runs out.
+
+The game's save chip (SRAM, Flash or EEPROM, as its library ID string or `game.toml`'s
 ```
 with:
 ```markdown
+
 `gbaport build` recompiles the game and compiles it with the runtime into
 `games/<game_code>/build/<game_code>.exe`, which runs the game in a window. Run it with
 the ROM it was built from:
@@ -3256,6 +3325,8 @@ the window is closed, or when the game executes the BIOS Stop call and nothing w
 (the window waits for a key instead, unless `--frames` limits the run); 2 for bad
 arguments, a different ROM or an unusable save file; 3 for a runtime error; 4 when
 `--frames` runs out.
+
+The game's save chip (SRAM, Flash or EEPROM, as its library ID string or `game.toml`'s
 ```
 
 In `docs/superpowers/specs/2026-10-17-gba-native-port-design.md`, replace:
