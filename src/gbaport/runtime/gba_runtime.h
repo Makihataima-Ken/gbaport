@@ -20,6 +20,8 @@
 #include "gba_cpu.h"
 
 enum {
+    GBA_SCREEN_WIDTH = 240,
+    GBA_SCREEN_HEIGHT = 160,
     GBA_CYCLES_HDRAW = 1008,  /* the HBlank flag and interrupt come this far into a line */
     GBA_CYCLES_LINE = 1232,
     GBA_LINES = 228,
@@ -139,7 +141,8 @@ GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr);
 int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *host);
 GbaEnd gba_run(GbaRuntime *rt);
 void gba_end(GbaRuntime *rt, GbaEnd why);  /* from a callback: ends gba_run */
-void gba_set_keys(GbaRuntime *rt, uint16_t pressed);
+void gba_set_keys(GbaRuntime *rt, uint16_t pressed);  /* GBA key bits, 1 = pressed */
+void gba_screen(const GbaRuntime *rt, uint32_t *pixels);  /* 240x160, 0x00RRGGBB */
 uint32_t gba_crc32(const uint8_t *data, uint32_t size);
 uint8_t *gba_save_data(GbaRuntime *rt, uint32_t *size);  /* size 0: nothing to store */
 int gba_save_dirty(const GbaRuntime *rt);

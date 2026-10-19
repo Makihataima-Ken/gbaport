@@ -1,11 +1,11 @@
 /* host_headless.c - run a recompiled game without a window.
  *
- *     game ROM [--frames N] [--save PATH] [--registers]
+ *     game ROM [--frames N] [--save PATH] [--registers] [--screenshot PATH]
  *
  * The game's mGBA debug-log lines go to stdout, runtime warnings and errors to stderr.
  * The save chip's contents live in PATH (default: the ROM's path with .sav): loaded at the
  * start, stored once a second while they change and again at the end. --registers prints
- * the CPU registers when the run ends.
+ * the CPU registers when the run ends; --screenshot writes the last picture as a BMP file.
  * Exit status: 0 the game executed Stop, 2 bad arguments, the wrong ROM or an unusable save
  * file, 3 a runtime error (for example code the recompiler did not find), 4 the frame
  * limit was reached. */
@@ -25,6 +25,7 @@
 static unsigned long frame_limit;
 static char save_path[1024];
 static int registers;
+static const char *screenshot;
 
 /* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 static uint8_t *read_file(const char *path, uint32_t *size)
@@ -79,6 +80,36 @@ static void store_save(GbaRuntime *rt)
     fprintf(stderr, "warning: cannot write the save file %s\n", save_path);
 }
 
+/* Writes 240x160 pixels (0x00RRGGBB) as a BMP file; returns 0 on success. */
+static int write_bmp(const char *path, const uint32_t *pixels)
+{
+    enum { W = GBA_SCREEN_WIDTH, H = GBA_SCREEN_HEIGHT, ROW = W * 3, DATA = ROW * H };
+    uint8_t header[54] = {'B', 'M'};
+    uint32_t fields[][2] = {  /* offset, value: little-endian 32-bit fields */
+        {2, 54 + DATA}, {10, 54}, {14, 40}, {18, W}, {22, H}, {34, DATA},
+    };
+    for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++)
+        for (int b = 0; b < 4; b++)
+            header[fields[i][0] + b] = (uint8_t)(fields[i][1] >> (8 * b));
+    header[26] = 1;   /* planes */
+    header[28] = 24;  /* bits per pixel */
+    FILE *f = fopen(path, "wb");
+    if (!f)
+        return -1;
+    fwrite(header, 1, sizeof header, f);
+    for (int y = H - 1; y >= 0; y--) {  /* bottom row first */
+        uint8_t row[ROW];
+        for (int x = 0; x < W; x++) {
+            uint32_t c = pixels[y * W + x];
+            row[x * 3] = (uint8_t)c;
+            row[x * 3 + 1] = (uint8_t)(c >> 8);
+            row[x * 3 + 2] = (uint8_t)(c >> 16);
+        }
+        fwrite(row, 1, ROW, f);
+    }
+    return fclose(f) == 0 ? 0 : -1;
+}
+
 static void on_frame(GbaRuntime *rt, void *user)
 {
     (void)user;
@@ -123,13 +154,16 @@ int main(int argc, char **argv)
             snprintf(save_path, sizeof save_path, "%s", argv[++i]);
         else if (strcmp(argv[i], "--registers") == 0)
             registers = 1;
+        else if (strcmp(argv[i], "--screenshot") == 0 && i + 1 < argc)
+            screenshot = argv[++i];
         else if (!rom_path && argv[i][0] != '-')
             rom_path = argv[i];
         else
             bad = 1;
     }
     if (!rom_path || bad) {
-        fprintf(stderr, "usage: %s ROM [--frames N] [--save PATH] [--registers]\n", argv[0]);
+        fprintf(stderr, "usage: %s ROM [--frames N] [--save PATH] [--registers] "
+                        "[--screenshot PATH]\n", argv[0]);
         return 2;
     }
     if (!save_path[0])
@@ -164,6 +198,12 @@ int main(int argc, char **argv)
         for (int i = 0; i < 15; i++)
             fprintf(stderr, " r%d=%08x", i, (unsigned)rt.cpu.r[i]);
         fprintf(stderr, " cpsr=%08x\n", (unsigned)gba_cpsr(&rt.cpu));
+    }
+    if (screenshot) {
+        static uint32_t pixels[GBA_SCREEN_WIDTH * GBA_SCREEN_HEIGHT];
+        gba_screen(&rt, pixels);
+        if (write_bmp(screenshot, pixels) != 0)
+            fprintf(stderr, "warning: cannot write %s\n", screenshot);
     }
     if (end == GBA_END_ERROR)
         fprintf(stderr, "error: %s\n", rt.error);

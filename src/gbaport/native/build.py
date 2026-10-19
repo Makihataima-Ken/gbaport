@@ -24,7 +24,7 @@ PACKAGE = Path(__file__).parent.parent
 RUNTIME = PACKAGE / "runtime"
 RUNTIME_SOURCES = (
     "runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "dma.c",
-    "bios.c", "bios_math.c", "bios_memory.c", "bios_decompress.c", "save.c",
+    "bios.c", "bios_math.c", "bios_memory.c", "bios_decompress.c", "save.c", "screen.c",
 )
 HOSTS = {"headless": "host_headless.c"}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c

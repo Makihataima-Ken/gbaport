@@ -208,3 +208,17 @@ def run_test(
     args: tuple[str, ...] = (),
 ) -> Run:
     return run_rom(build_test_rom(name, data), frames=frames, save=save, args=args)
+
+def read_bmp(path: Path) -> list[int]:
+    """A 240x160, 24-bit BMP's pixels as 0x00RRGGBB values, top row first."""
+    data = path.read_bytes()
+    offset, = struct.unpack_from("<I", data, 10)
+    width, height = struct.unpack_from("<ii", data, 18)
+    assert (width, abs(height), data[28]) == (240, 160, 24), "not a 240x160 24-bit BMP"
+    pixels = []
+    for y in range(160):
+        row = offset + (159 - y if height > 0 else y) * 720  # bottom-up unless the height is negative
+        for x in range(240):
+            b, g, r = data[row + 3 * x : row + 3 * x + 3]
+            pixels.append(r << 16 | g << 8 | b)
+    return pixels
