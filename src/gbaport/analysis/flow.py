@@ -70,8 +70,8 @@ def writes_pc(ins: Instruction) -> bool:
         return ins.rd == PC
     if ins.op is Op.LDR:
         return ins.rd == PC
-    if ins.op is Op.LDM:
-        return PC in ins.reglist
+    if ins.op is Op.LDM:  # ARMv4: an empty list loads r15 alone
+        return PC in ins.reglist or not ins.reglist
     return False
 
 

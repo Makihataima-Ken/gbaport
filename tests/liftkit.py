@@ -62,6 +62,7 @@ class Case:
     mode: int = SYS_MODE
     ewram: bytes = bytes(WINDOW)
     iwram: bytes = bytes(WINDOW)
+    entries: tuple[int, ...] = ()  # more functions to recompile (in the case's state)
 
     @property
     def cpsr(self) -> int:
@@ -124,7 +125,7 @@ def lift_cases(cases: list[Case]) -> str:
     for i, case in enumerate(cases):
         space = CodeSpace(RomImage(case.rom()))
         mode = Mode.THUMB if case.thumb else Mode.ARM
-        ex = explore(space, [(CODE_ADDR, mode, "seed")])
+        ex = explore(space, [(addr, mode, "seed") for addr in (CODE_ADDR, *case.entries)])
         lifted = lift_program(build_program(ex), ex, prefix=f"c{i}_")
         parts += [lifted.prototypes, *lifted.functions.values(), lifted.dispatch]
         entries.append((function_name(CODE_ADDR, lifted.prefix), lifted.lookup_name))

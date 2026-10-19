@@ -79,7 +79,13 @@ def lift_effects(ins: Instruction) -> list[str]:
 
 
 def restores_cpsr(ins: Instruction) -> bool:
-    """An exception return (movs pc, ... or ldm ... {..., pc}^): CPSR = SPSR, T bit included."""
+    """An exception return (movs pc, ... or ldm ... {..., pc}^): CPSR = SPSR, T bit included.
+
+    An ARM compare whose Rd field is 15 (the old tstp/teqp/cmpp/cmnp) copies SPSR to CPSR
+    too, without jumping.
+    """
+    if ins.op in COMPARE_OPS:
+        return ins.mode is Mode.ARM and (ins.raw >> 12) & 0xF == PC
     if ins.op in DATA_PROCESSING_OPS:
         return ins.s and ins.rd == PC
     return ins.op is Op.LDM and ins.user and PC in ins.reglist
@@ -218,10 +224,9 @@ def _single_transfer(ins: Instruction) -> list[str]:
 
 
 def _block_transfer(ins: Instruction) -> list[str]:
-    regs = ins.reglist
-    if not regs:
-        raise LiftError(f"{ins.addr:#010x}: LDM/STM with an empty register list")
-    count = len(regs)
+    # ARMv4: an empty list transfers r15 alone, at the address the first of 16 would use.
+    regs = ins.reglist or (PC,)
+    count = len(ins.reglist) or 16
     base = read(ins, ins.rn)
     first = {(False, True): 0, (True, True): 4, (False, False): -4 * count + 4,
              (True, False): -4 * count}[(ins.pre, ins.up)]

@@ -3,7 +3,9 @@ from progkit import CRT0, program_space
 from gbaport.analysis.cfg import build_program
 from gbaport.analysis.discover import explore
 from gbaport.isa.model import Mode
+from gbaport.lift import function
 from gbaport.lift.program import lift_program, program_files, single_source
+from gbaport.lift.semantics import LiftError
 
 # Two functions without calls, both given as seeds.   c0 first   c8 second
 TWO_FUNCTIONS = """
@@ -49,9 +51,17 @@ def test_program_files_split_the_code():
     assert single_source(program).startswith('#include "gba_cpu.h"')
 
 
-def test_an_instruction_c_cannot_express_is_reported():
-    program = lifted(".word 0xe8bd0000\nbx lr")  # ldmia sp!, {} (empty register list)
-    assert program.problems == ("0x080000c0: LDM/STM with an empty register list",)
+def test_an_instruction_c_cannot_express_is_reported(monkeypatch):
+    effects = function.lift_effects
+
+    def refuse_the_first(ins):  # every instruction has C now: pretend the first does not
+        if ins.addr == 0x080000C0:
+            raise LiftError(f"{ins.addr:#010x}: no effects for {ins.op.value}")
+        return effects(ins)
+
+    monkeypatch.setattr(function, "lift_effects", refuse_the_first)
+    program = lifted("mov r0, #1\nbx lr")
+    assert program.problems == ("0x080000c0: no effects for mov",)
     assert "gba_undefined(ctx, 0x080000c0u);" in program.functions[0x080000C0]
 
 
