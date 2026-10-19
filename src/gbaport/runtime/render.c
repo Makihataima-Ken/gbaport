@@ -33,6 +33,13 @@
  * otherwise WINOUT. A rectangle whose end comes before its start wraps around; coordinates
  * past the screen are cut back to its edge, as in mGBA.
  *
+ * Colour special effects (BLDCNT) work on the topmost layer when it is a 1st target and
+ * the window allows effects: alpha blending with the layer right below it, when that is a
+ * 2nd target (BLDALPHA's factors, at most 16/16), or brightening or darkening (BLDY, at
+ * most 16/16), in 5 bits per channel like the GBA. A semi-transparent sprite on top of a
+ * 2nd target blends with it whatever BLDCNT's effect and the window say; anywhere else it
+ * takes BLDCNT's effect like any other sprite (as GBATEK describes and mGBA does).
+ *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
@@ -49,6 +56,7 @@ typedef struct {
     uint16_t obj[W];           /* the sprites' colours, or CLEAR */
     uint8_t obj_priority[W];   /* the sprites' priority; 4 where none drew */
     uint8_t obj_window[W];     /* where an OBJ window sprite has a colour */
+    uint8_t obj_semi[W];       /* the sprite colour there is semi-transparent */
 } Layers;
 
 static const uint8_t SPRITE_SIZES[16][2] = {  /* by shape * 4 + size: width, height */
@@ -202,6 +210,7 @@ static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, La
     uint32_t palette = 0x200 + (colors256 ? 0 : (a2 >> 12) * 32u);
     uint8_t priority = (a2 >> 10) & 3;
     int window = ((a0 >> 10) & 3) == 2;  /* draws the OBJ window, not colours */
+    uint8_t semi = ((a0 >> 10) & 3) == 1;
     int16_t pa = 0, pb = 0, pc = 0, pd = 0;
     if (affine) {
         const uint8_t *matrix = rt->oam + ((a1 >> 9) & 31) * 32;
@@ -245,8 +254,10 @@ static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, La
         if (color) {
             layers->obj[x] = color_at(rt->palette, palette + color * 2);
             layers->obj_priority[x] = priority;
+            layers->obj_semi[x] = semi;
         } else if (layers->obj[x] != CLEAR) {
-            layers->obj_priority[x] = priority;  /* the transparent pixel still passes its priority */
+            layers->obj_priority[x] = priority;  /* the transparent pixel still passes its priority, */
+            layers->obj_semi[x] = semi;          /* and whether it is semi-transparent */
         }
     }
 }
@@ -258,6 +269,7 @@ static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
         layers->obj[x] = CLEAR;
         layers->obj_priority[x] = 4;
         layers->obj_window[x] = 0;
+        layers->obj_semi[x] = 0;
     }
     int time = IO(rt, GBA_REG_DISPCNT) & 0x20 ? 954 : 1210;
     for (int i = 0; i < 128; i++) {
@@ -326,29 +338,70 @@ static void window_line(const GbaRuntime *rt, int y, const Layers *layers, uint8
     }
 }
 
-/* Every pixel: the topmost layer with a colour there, or the backdrop. */
+static unsigned weight(unsigned value)  /* an effect factor: 0-16 sixteenths */
+{
+    value &= 0x1F;
+    return value > 16 ? 16 : value;
+}
+
+static uint16_t mix(uint16_t a, uint16_t b, unsigned wa, unsigned wb)
+{
+    uint16_t out = 0;
+    for (int shift = 0; shift < 15; shift += 5) {
+        unsigned c = (((a >> shift) & 31) * wa + ((b >> shift) & 31) * wb) / 16;
+        out |= (uint16_t)((c > 31 ? 31 : c) << shift);
+    }
+    return out;
+}
+
+static uint16_t brightness(uint16_t color, unsigned evy, int up)
+{
+    uint16_t out = 0;
+    for (int shift = 0; shift < 15; shift += 5) {
+        unsigned c = (color >> shift) & 31;
+        c = up ? c + (31 - c) * evy / 16 : c - c * evy / 16;
+        out |= (uint16_t)(c << shift);
+    }
+    return out;
+}
+
+/* Every pixel: the topmost layer with a colour there (layer 0-3: a background, 4: the
+ * sprites, 5: the backdrop), with the colour effects. */
 static void compose(const GbaRuntime *rt, const Layers *layers, unsigned all, int y, uint16_t *row)
 {
     uint16_t backdrop = color_at(rt->palette, 0);
+    uint16_t targets = IO(rt, 0x50), factors = IO(rt, 0x52);
+    unsigned effect = (targets >> 6) & 3, eva = weight(factors), evb = weight(factors >> 8);
+    unsigned evy = weight(IO(rt, 0x54));
     uint8_t region[W];
     window_line(rt, y, layers, region);
     for (int x = 0; x < W; x++) {
         unsigned enabled = all & region[x];
-        row[x] = backdrop;
-        int found = 0;
-        for (unsigned priority = 0; priority < 4 && !found; priority++) {
+        int layer[2] = {5, 5}, found = 0;
+        uint16_t color[2] = {backdrop, backdrop};
+        for (unsigned priority = 0; priority < 4 && found < 2; priority++) {
             if ((enabled & 0x10) && layers->obj_priority[x] == priority && layers->obj[x] != CLEAR) {
-                row[x] = layers->obj[x];
-                found = 1;
+                layer[found] = 4;
+                color[found++] = layers->obj[x];
             }
-            for (int n = 0; n < 4 && !found; n++) {
+            for (int n = 0; n < 4 && found < 2; n++) {
                 if ((enabled & (1u << n)) && (IO(rt, 0x08 + 2 * n) & 3) == priority &&
                     layers->bg[n][x] != CLEAR) {
-                    row[x] = layers->bg[n][x];
-                    found = 1;
+                    layer[found] = n;
+                    color[found++] = layers->bg[n][x];
                 }
             }
         }
+        int second = (targets >> 8) & (1u << layer[1]);
+        if (layer[0] == 4 && layers->obj_semi[x] && second) {
+            color[0] = mix(color[0], color[1], eva, evb);
+        } else if ((region[x] & 0x20) && (targets & (1u << layer[0]))) {
+            if (effect == 1 && second)
+                color[0] = mix(color[0], color[1], eva, evb);
+            else if (effect >= 2)
+                color[0] = brightness(color[0], evy, effect == 2);
+        }
+        row[x] = color[0];
     }
 }
 
