@@ -69,3 +69,29 @@ def assert_same_picture(rom: TestRom, frames: int = 30) -> None:
 
 def assert_test_rom_matches(name: str, data: str = "", frames: int = 30) -> None:
     assert_same_picture(build_test_rom(name, data), frames)
+
+
+IDENTITY = (0x100, 0, 0, 0x100)
+
+
+def obj(x: int, y: int, shape: int = 0, size: int = 0, tile: int = 0, palette: int = 0,
+        priority: int = 0, colors256: bool = False, hflip: bool = False, vflip: bool = False,
+        affine: int | None = None, double: bool = False, mode: int = 0) -> tuple[int, int, int]:
+    """OAM attributes 0-2 of a sprite (affine: its matrix number)."""
+    a0 = (y & 0xFF) | mode << 10 | (0x2000 if colors256 else 0) | shape << 14
+    a1 = (x & 0x1FF) | size << 14
+    if affine is None:
+        a1 |= hflip << 12 | vflip << 13
+    else:
+        a0 |= 0x100 | (0x200 if double else 0)
+        a1 |= affine << 9
+    return a0, a1, tile | priority << 10 | palette << 12
+
+
+def scene(io: list[tuple[int, int]], objs=(), matrices=(IDENTITY,)) -> str:
+    """testdata.h for scene.c: register writes ({offset, value}, in order), sprites and
+    matrices."""
+    writes = ", ".join(f"{{0x{offset:03x}, 0x{value:04x}}}" for offset, value in io)
+    rows = ", ".join(f"{{{a}, {b}, {c}}}" for a, b, c in objs) or "{0x0200, 0, 0}"
+    mats = ", ".join(f"{{{a}, {b}, {c}, {d}}}" for a, b, c, d in matrices)
+    return f"#define IO_WRITES {{{writes}}}\n#define OBJS {{{rows}}}\n#define MATRICES {{{mats}}}\n"

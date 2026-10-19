@@ -3,23 +3,7 @@ flips, rotation/scaling and double size, the screen's edges, priorities among sp
 against backgrounds, the bitmap modes, and how many sprites a line has time for."""
 
 import pytest
-from rendertest import assert_test_rom_matches
-
-IDENTITY = (0x100, 0, 0, 0x100)
-
-
-def obj(x: int, y: int, shape: int = 0, size: int = 0, tile: int = 0, palette: int = 0,
-        priority: int = 0, colors256: bool = False, hflip: bool = False, vflip: bool = False,
-        affine: int | None = None, double: bool = False, mode: int = 0) -> tuple[int, int, int]:
-    """OAM attributes 0-2 of a sprite (affine: its matrix number)."""
-    a0 = (y & 0xFF) | mode << 10 | (0x2000 if colors256 else 0) | shape << 14
-    a1 = (x & 0x1FF) | size << 14
-    if affine is None:
-        a1 |= hflip << 12 | vflip << 13
-    else:
-        a0 |= 0x100 | (0x200 if double else 0)
-        a1 |= affine << 9
-    return a0, a1, tile | priority << 10 | palette << 12
+from rendertest import IDENTITY, assert_test_rom_matches, obj
 
 
 def scene(dispcnt: int, objs: list[tuple[int, int, int]], matrices=(IDENTITY,), bgcnt0: int = 0) -> str:

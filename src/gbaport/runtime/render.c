@@ -27,6 +27,12 @@
  * 1210 cycles (954 with "HBlank interval free"), a sprite costing its width, or 10 plus
  * twice its box's width when it rotates.
  *
+ * Windows choose which layers show where. With any of DISPCNT bits 13-15 set, every pixel
+ * takes the layer bits of the first window it is in: WIN0, then WIN1 (rectangles, from
+ * WINnH/WINnV), then the OBJ window (where OBJ window sprites have a colour), and
+ * otherwise WINOUT. A rectangle whose end comes before its start wraps around; coordinates
+ * past the screen are cut back to its edge, as in mGBA.
+ *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
@@ -42,6 +48,7 @@ typedef struct {
     uint16_t bg[4][W];         /* each background's colours on this line, or CLEAR */
     uint16_t obj[W];           /* the sprites' colours, or CLEAR */
     uint8_t obj_priority[W];   /* the sprites' priority; 4 where none drew */
+    uint8_t obj_window[W];     /* where an OBJ window sprite has a colour */
 } Layers;
 
 static const uint8_t SPRITE_SIZES[16][2] = {  /* by shape * 4 + size: width, height */
@@ -194,6 +201,7 @@ static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, La
     uint32_t across = one_d ? 0x7FFF : 0x3FF, row_base = one_d ? 0 : start & 0x7C00;
     uint32_t palette = 0x200 + (colors256 ? 0 : (a2 >> 12) * 32u);
     uint8_t priority = (a2 >> 10) & 3;
+    int window = ((a0 >> 10) & 3) == 2;  /* draws the OBJ window, not colours */
     int16_t pa = 0, pb = 0, pc = 0, pd = 0;
     if (affine) {
         const uint8_t *matrix = rt->oam + ((a1 >> 9) & 31) * 32;
@@ -227,6 +235,11 @@ static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, La
         unsigned color = rt->vram[0x10000 + ((y_part + row_base + ((x_part + start) & across)) & 0x7FFF)];
         if (!colors256)
             color = tx & 1 ? color >> 4 : color & 15;
+        if (window) {
+            if (color)
+                layers->obj_window[x] = 1;
+            continue;
+        }
         if (layers->obj_priority[x] <= priority)
             continue;  /* an earlier sprite, or one with a lower priority number, is on top */
         if (color) {
@@ -244,6 +257,7 @@ static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
     for (int x = 0; x < W; x++) {
         layers->obj[x] = CLEAR;
         layers->obj_priority[x] = 4;
+        layers->obj_window[x] = 0;
     }
     int time = IO(rt, GBA_REG_DISPCNT) & 0x20 ? 954 : 1210;
     for (int i = 0; i < 128; i++) {
@@ -264,19 +278,62 @@ static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
         int in_y = y - top;
         if (affine ? in_y < 0 : top + height >= 256)
             in_y += 256;  /* the sprite wraps past line 255 */
-        if (((a0 >> 10) & 3) != 2)  /* OBJ window sprites draw no colour */
-            sprite_line(rt, entry, in_y, layers);
+        sprite_line(rt, entry, in_y, layers);
         time -= affine ? 10 + box_w * 2 : width;
         if (time <= 0)
             break;
     }
 }
 
+/* WINnH or WINnV: start (high byte) and end (low byte), cut back to the screen as mGBA
+ * does; returns whether position `at` is inside. */
+static int inside(uint16_t value, int limit, int at)
+{
+    int start = value >> 8, end = value & 0xFF;
+    if (start > limit && start > end)
+        start = 0;
+    if (end > limit) {
+        end = limit;
+        if (start > limit)
+            start = limit;
+    }
+    if (end >= start)
+        return at >= start && at < end;
+    return at >= start || at < end;  /* wraps around */
+}
+
+/* Each pixel's layer bits (BG0-BG3, sprites, effects) on line y. */
+static void window_line(const GbaRuntime *rt, int y, const Layers *layers, uint8_t *region)
+{
+    uint16_t control = IO(rt, GBA_REG_DISPCNT);
+    if (!(control & 0xE000)) {
+        for (int x = 0; x < W; x++)
+            region[x] = 0x3F;
+        return;
+    }
+    uint16_t win_in = IO(rt, 0x48), win_out = IO(rt, 0x4A);
+    int in0 = (control & 0x2000) && inside(IO(rt, 0x44), H, y);
+    int in1 = (control & 0x4000) && inside(IO(rt, 0x46), H, y);
+    for (int x = 0; x < W; x++) {
+        if (in0 && inside(IO(rt, 0x40), W, x))
+            region[x] = win_in & 0x3F;
+        else if (in1 && inside(IO(rt, 0x42), W, x))
+            region[x] = (win_in >> 8) & 0x3F;
+        else if ((control & 0x8000) && layers->obj_window[x])
+            region[x] = (win_out >> 8) & 0x3F;
+        else
+            region[x] = win_out & 0x3F;
+    }
+}
+
 /* Every pixel: the topmost layer with a colour there, or the backdrop. */
-static void compose(const GbaRuntime *rt, const Layers *layers, unsigned enabled, uint16_t *row)
+static void compose(const GbaRuntime *rt, const Layers *layers, unsigned all, int y, uint16_t *row)
 {
     uint16_t backdrop = color_at(rt->palette, 0);
+    uint8_t region[W];
+    window_line(rt, y, layers, region);
     for (int x = 0; x < W; x++) {
+        unsigned enabled = all & region[x];
         row[x] = backdrop;
         int found = 0;
         for (unsigned priority = 0; priority < 4 && !found; priority++) {
@@ -328,8 +385,11 @@ void gba_render_line(GbaRuntime *rt, int y)
     if (control & 0x1000) {
         sprites_line(rt, y, &layers);
         enabled |= 0x10;
+    } else {
+        for (int x = 0; x < W; x++)
+            layers.obj_window[x] = 0;  /* no sprites, no OBJ window */
     }
-    compose(rt, &layers, enabled, row);
+    compose(rt, &layers, enabled, y, row);
     for (int n = 0; n < 2; n++) {
         if (mode != 0 && (control & (0x400u << n))) {
             rt->affine_x[n] += (int16_t)IO(rt, 0x22 + 0x10 * n);  /* PB */
