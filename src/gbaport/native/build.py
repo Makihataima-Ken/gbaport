@@ -4,8 +4,8 @@
 ``gba_rom.c``, which records where the game starts (the target of the cartridge's entry
 branch, which the analysis starts from), the size and CRC32 of the ROM the code came from
 (the runtime refuses any other ROM) and which save chip the game has. ``compile_native``
-compiles those sources together with the runtime in ``gbaport/runtime`` and one host
-(``host_headless.c`` so far).
+compiles those sources together with the runtime in ``gbaport/runtime`` and one host:
+``sdl`` (a window, with SDL3 from ``sdl3.py``) or ``headless`` (for tests and scripts).
 """
 
 import os
@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from gbaport.lift.program import HEADER, LiftedProgram, program_files
+from gbaport.native.sdl3 import sdl3_flags, sdl3_prefix
 from gbaport.native.toolchain import ToolchainError, find_clang
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
@@ -26,7 +27,7 @@ RUNTIME_SOURCES = (
     "runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "dma.c",
     "bios.c", "bios_math.c", "bios_memory.c", "bios_decompress.c", "save.c", "screen.c",
 )
-HOSTS = {"headless": ("host_common.c", "host_headless.c")}
+HOSTS = {"headless": ("host_common.c", "host_headless.c"), "sdl": ("host_common.c", "host_sdl.c")}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c
 CFLAGS = ("-std=c11", "-O2", "-Wall", "-Werror", "-Wno-unused-label")
 SALTED_REBUILDS = 20  # how often a build Windows refuses to start is made again (8 was seen)
@@ -72,13 +73,14 @@ def write_sources(files: dict[str, str], out: Path) -> None:
 def compile_native(sources: Path, out: Path, name: str, host: str = "headless") -> Path:
     """Compile the generated ``sources`` with the runtime and ``host``; returns the program."""
     clang = find_clang()
+    include, libraries = sdl3_flags(sdl3_prefix()) if host == "sdl" else ([], [])
     objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
     units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in (*RUNTIME_SOURCES, *HOSTS[host]))]
 
     def compile_unit(unit: Path) -> Path:
         obj = objects / f"{unit.stem}.o"
-        command = [clang, *CFLAGS, f"-I{sources}", f"-I{RUNTIME}", "-c", str(unit), "-o", str(obj)]
+        command = [clang, *CFLAGS, f"-I{sources}", f"-I{RUNTIME}", *include, "-c", str(unit), "-o", str(obj)]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise ToolchainError(f"clang failed on {unit.name}:\n{result.stderr[-4000:]}")
@@ -87,13 +89,13 @@ def compile_native(sources: Path, out: Path, name: str, host: str = "headless") 
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
         compiled = list(pool.map(compile_unit, units))
     program = out / (name + (".exe" if os.name == "nt" else ""))
-    _link(clang, compiled, program)
+    _link(clang, compiled, program, libraries)
     for _ in range(SALTED_REBUILDS):
         if _starts(program):
             return program
         salt = objects / "gba_salt.c"
         salt.write_text(f'const char gba_build_salt[] = "{os.urandom(8).hex()}";\n', encoding="utf-8")
-        _link(clang, [*compiled, compile_unit(salt)], program)
+        _link(clang, [*compiled, compile_unit(salt)], program, libraries)
     if _starts(program):
         return program
     raise ToolchainError(
@@ -102,9 +104,9 @@ def compile_native(sources: Path, out: Path, name: str, host: str = "headless") 
     )
 
 
-def _link(clang: str, objects: list[Path], program: Path) -> None:
+def _link(clang: str, objects: list[Path], program: Path, libraries: list[str]) -> None:
     result = subprocess.run(
-        [clang, *(str(obj) for obj in objects), "-o", str(program)],
+        [clang, *(str(obj) for obj in objects), *libraries, "-o", str(program)],
         capture_output=True, text=True, check=False,
     )
     if result.returncode != 0:

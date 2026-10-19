@@ -8,10 +8,14 @@ much code discovery finds by itself. A test ROM reports through mGBA's debug log
 ``PASS name`` or ``FAIL name: ...`` line per check, then ``DONE n passed, m failed``)
 and ends with the BIOS Stop call.
 
+Runs use the headless host unless they ask for the window host (``host="sdl"``), which
+then runs with SDL's dummy video driver: no window opens.
+
 ROMs and native builds are cached in the system temp folder by the hash of their sources.
 """
 
 import hashlib
+import os
 import struct
 import subprocess
 import tempfile
@@ -153,8 +157,8 @@ class Run:
         assert self.lines and self.lines[-1].startswith("DONE "), "\n".join(self.lines)
 
 
-def native_program(rom: TestRom) -> Path:
-    """Recompile ``rom`` and build it with the headless host (cached by the C sources)."""
+def native_program(rom: TestRom, host: str = "headless") -> Path:
+    """Recompile ``rom`` and build it with ``host`` (cached by the C sources)."""
     image = RomImage(rom.data)
     analysis = analyze_rom(image, parse_config(rom.config), ())
     lifted = lift_program(analysis.program, analysis.exploration)
@@ -162,21 +166,23 @@ def native_program(rom: TestRom) -> Path:
     runtime = [path.read_bytes() for path in sorted(native.RUNTIME.glob("*.[ch]"))]
     flags = " ".join([*native.CFLAGS, *native.RUNTIME_SOURCES])
     sources = (f"{name}\n{text}" for name, text in sorted(files.items()))
-    folder = CACHE / "native" / _digest(*sources, *runtime, flags)
+    folder = CACHE / "native" / _digest(*sources, *runtime, flags, host)
     built = folder / "program.txt"  # written last: the build finished
     if not built.exists():
         native.write_sources(files, folder / "generated")
-        program = native.compile_native(folder / "generated", folder / "build", "game")
+        program = native.compile_native(folder / "generated", folder / "build", "game", host)
         built.write_text(str(program), encoding="utf-8")
     return Path(built.read_text(encoding="utf-8"))
 
 
-def run_program(command: list[str]) -> subprocess.CompletedProcess:
+def run_program(command: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Run a native program. Windows' Smart App Control sometimes blocks a program the
     first time it starts after being built (WinError 4551); a later start works."""
     for attempt in range(5):
         try:
-            return subprocess.run(command, capture_output=True, text=True, timeout=120, check=False)
+            return subprocess.run(
+                command, capture_output=True, text=True, timeout=120, check=False, env=env
+            )
         except OSError as error:
             if getattr(error, "winerror", None) != 4551 or attempt == 4:
                 raise
@@ -186,28 +192,30 @@ def run_program(command: list[str]) -> subprocess.CompletedProcess:
 
 def run_rom(
     rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None,
-    args: tuple[str, ...] = (),
+    host: str = "headless", args: tuple[str, ...] = (),
 ) -> Run:
     """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set).
 
     The game's save file is ``save``; without one, every run starts with a blank save.
     ``args`` go to the program after the usual ones.
     """
-    program = native_program(rom)
+    program = native_program(rom, host)
     path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
     path.write_bytes(rom_file or rom.data)
+    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy"} if host == "sdl" else None
     with tempfile.TemporaryDirectory() as scratch:
         save_path = save or Path(scratch) / "game.sav"
         command = [str(program), str(path), "--frames", str(frames), "--save", str(save_path), *args]
-        result = run_program(command)
+        result = run_program(command, env)
     return Run(result.returncode, tuple(result.stdout.splitlines()), result.stderr)
 
 
 def run_test(
     name: str, *, frames: int = 600, data: str = "", save: Path | None = None,
-    args: tuple[str, ...] = (),
+    host: str = "headless", args: tuple[str, ...] = (),
 ) -> Run:
-    return run_rom(build_test_rom(name, data), frames=frames, save=save, args=args)
+    return run_rom(build_test_rom(name, data), frames=frames, save=save, host=host, args=args)
+
 
 def read_bmp(path: Path) -> list[int]:
     """A 240x160, 24-bit BMP's pixels as 0x00RRGGBB values, top row first."""

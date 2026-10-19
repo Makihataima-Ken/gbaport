@@ -12,7 +12,7 @@ from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save
 from gbaport.disasm import disassemble, format_line
 from gbaport.isa.model import Mode
 from gbaport.lift.program import HEADER, lift_program
-from gbaport.native.build import compile_native, generated_sources, write_sources
+from gbaport.native.build import HOSTS, compile_native, generated_sources, write_sources
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
@@ -247,6 +247,12 @@ def _add_build_command(commands) -> None:
         "--out",
         help="folder for generated/ and build/ (default: games/<game_code>)",
     )
+    build.add_argument(
+        "--host",
+        choices=sorted(HOSTS),
+        default="sdl",
+        help="sdl: a window (the default; builds SDL3 the first time); headless: no window",
+    )
     build.set_defaults(handler=_run_build)
 
 
@@ -255,9 +261,10 @@ def _run_build(args: argparse.Namespace) -> int:
     game_code = parse_header(rom).game_code or "game"
     root = Path(args.out) if args.out else Path("games") / game_code
     _recompile(args, rom, root / "generated")
-    program = compile_native(root / "generated", root / "build", game_code)
+    name = game_code if args.host == "sdl" else f"{game_code}-{args.host}"
+    program = compile_native(root / "generated", root / "build", name, args.host)
     print(f"built {program}")
-    print(f"run it with: {program} {args.rom} [--frames N]")
+    print(f"run it with: {program} {args.rom} [--save PATH] [--frames N]")
     return 0
 
 
