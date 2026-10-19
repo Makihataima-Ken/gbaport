@@ -240,8 +240,8 @@ def _block_transfer(ins: Instruction) -> list[str]:
         if ins.op is Op.STM:
             if r == ins.rn and ins.writeback and i > 0:
                 value = "final"  # ARMv4: the new base is stored unless it comes first
-            elif r == PC:
-                value = hexu(pc_value(ins) + 4)
+            elif r == PC:  # the instruction's address + 12 in ARM state, + 6 in Thumb
+                value = hexu(pc_value(ins) + (4 if ins.mode is Mode.ARM else 2))
             else:
                 value = target
             body.append(f"gba_write32(ctx, {slot}, {value});")

@@ -55,6 +55,20 @@ def test_an_empty_register_list_stores_r15_and_moves_the_base_by_0x40():
         assert ram[at : at + 4] == stored, hex(word)
 
 
+def test_a_thumb_empty_register_list_stores_r15_as_its_address_plus_6():
+    stored = struct.pack("<I", CODE_ADDR + 6)  # the ARM7TDMI's Thumb pc + 2, as mGBA has it
+    for source, reg, base in (
+        (".hword 0xc000", 0, 0x240),   # stmia r0!, {}
+        (".hword 0xb400", 13, 0x1C0),  # push {}
+    ):
+        case = Case(source + "\n", thumb=True)
+        case.regs[reg] = EWRAM + 0x200
+        out = run_lifted([case])[0]
+        assert out.status == "stopped", source
+        assert out.regs[reg] == EWRAM + base, source
+        assert out.ewram[min(base, 0x200) : min(base, 0x200) + 4] == stored, source
+
+
 def test_an_ldm_with_an_empty_register_list_loads_r15_and_moves_the_base_by_0x40():
     source = (
         "adr r1, after\n"

@@ -4,9 +4,11 @@ Test ROMs from <https://github.com/jsmolka/gba-tests> (MIT licence), commit
 `a7113b67e63f83a9b321696ddd7042ccfad6c881`. `tests/runtime/test_public_roms.py` downloads
 them from that commit the first time, checks their SHA-1 and caches them with the other
 test ROMs: like every `.gba` file, they are not in the repository. Each ROM runs its tests,
-shows "All tests passed" or "Failed test N" in mode 4 and then idles; register r12 holds
-the number of the first failed test (0 when all passed), which
-`tests/runtime/test_public_roms.py` reads with the hosts' `--registers` option.
+shows "All tests passed" or "Failed test N" in mode 4 and then idles; a register (r12, r7
+in `thumb.gba`) holds the number of the first failed test (0 when all passed).
+`tests/runtime/test_public_roms.py` reads it with the hosts' `--registers` option and
+checks the picture with `--screenshot`: the register is 0 too while the tests have not
+finished.
 
 | ROM | Tests |
 |---|---|
