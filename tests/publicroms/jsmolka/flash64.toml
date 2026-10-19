@@ -1,0 +1,5 @@
+# jsmolka/gba-tests flash64.gba (see README.md)
+[rom]
+sha1 = "354fe3dba476b54b869cb44aeb6968fdd72dabd3"
+# Its save marker has no version digits, which the detection needs.
+save = "flash64k"

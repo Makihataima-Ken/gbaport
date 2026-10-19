@@ -1,0 +1,8 @@
+# jsmolka/gba-tests arm.gba (see README.md)
+[rom]
+sha1 = "753d7f40f50735bf13faab215cf9268f76cf9065"
+
+[code]
+# Reached through code addresses the test stores in RAM and loads into pc (ldr pc,
+# ldmia {r0, pc}, ldmia with an empty list), which code discovery cannot follow.
+entries = [0x080012b8, 0x0800191c, 0x080019dc]

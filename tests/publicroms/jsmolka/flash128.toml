@@ -1,0 +1,5 @@
+# jsmolka/gba-tests flash128.gba (see README.md)
+[rom]
+sha1 = "9396b0525ae548e524d50cd6c48ea3e15b092504"
+# Its save marker has no version digits, which the detection needs.
+save = "flash128k"

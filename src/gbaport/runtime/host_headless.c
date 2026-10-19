@@ -1,10 +1,11 @@
 /* host_headless.c - run a recompiled game without a window.
  *
- *     game ROM [--frames N] [--save PATH]
+ *     game ROM [--frames N] [--save PATH] [--registers]
  *
  * The game's mGBA debug-log lines go to stdout, runtime warnings and errors to stderr.
  * The save chip's contents live in PATH (default: the ROM's path with .sav): loaded at the
- * start, stored once a second while they change and again at the end.
+ * start, stored once a second while they change and again at the end. --registers prints
+ * the CPU registers when the run ends.
  * Exit status: 0 the game executed Stop, 2 bad arguments, the wrong ROM or an unusable save
  * file, 3 a runtime error (for example code the recompiler did not find), 4 the frame
  * limit was reached. */
@@ -23,6 +24,7 @@
 
 static unsigned long frame_limit;
 static char save_path[1024];
+static int registers;
 
 /* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 static uint8_t *read_file(const char *path, uint32_t *size)
@@ -119,13 +121,15 @@ int main(int argc, char **argv)
             frame_limit = strtoul(argv[++i], NULL, 10);
         else if (strcmp(argv[i], "--save") == 0 && i + 1 < argc)
             snprintf(save_path, sizeof save_path, "%s", argv[++i]);
+        else if (strcmp(argv[i], "--registers") == 0)
+            registers = 1;
         else if (!rom_path && argv[i][0] != '-')
             rom_path = argv[i];
         else
             bad = 1;
     }
     if (!rom_path || bad) {
-        fprintf(stderr, "usage: %s ROM [--frames N] [--save PATH]\n", argv[0]);
+        fprintf(stderr, "usage: %s ROM [--frames N] [--save PATH] [--registers]\n", argv[0]);
         return 2;
     }
     if (!save_path[0])
@@ -155,6 +159,12 @@ int main(int argc, char **argv)
     free(save);
     GbaEnd end = gba_run(&rt);
     store_save(&rt);
+    if (registers) {
+        fprintf(stderr, "registers");
+        for (int i = 0; i < 15; i++)
+            fprintf(stderr, " r%d=%08x", i, (unsigned)rt.cpu.r[i]);
+        fprintf(stderr, " cpsr=%08x\n", (unsigned)gba_cpsr(&rt.cpu));
+    }
     if (end == GBA_END_ERROR)
         fprintf(stderr, "error: %s\n", rt.error);
     else if (end == GBA_END_HOST)

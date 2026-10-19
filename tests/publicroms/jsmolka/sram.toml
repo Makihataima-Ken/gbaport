@@ -1,0 +1,5 @@
+# jsmolka/gba-tests sram.gba (see README.md)
+[rom]
+sha1 = "4fc95dc85cb68fdbc04c6689c9d62329582a1856"
+# Its save marker, "SRAM_V" with no version digits, is not one the detection knows.
+save = "sram"

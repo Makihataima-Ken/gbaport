@@ -1,0 +1,8 @@
+# jsmolka/gba-tests thumb.gba (see README.md)
+[rom]
+sha1 = "bdcf58182e9a99b388acba5fbca87ac31e8f58eb"
+
+[code]
+# Reached through pop {pc} with a pushed lr the test computed, and through a code
+# address loaded from RAM by ldmia r0!, {}.
+thumb_entries = [0x08000840, 0x08000850, 0x080008a8]

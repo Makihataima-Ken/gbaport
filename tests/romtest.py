@@ -185,21 +185,26 @@ def run_program(command: list[str]) -> subprocess.CompletedProcess:
 
 
 def run_rom(
-    rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None
+    rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None,
+    args: tuple[str, ...] = (),
 ) -> Run:
     """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set).
 
     The game's save file is ``save``; without one, every run starts with a blank save.
+    ``args`` go to the program after the usual ones.
     """
     program = native_program(rom)
     path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
     path.write_bytes(rom_file or rom.data)
     with tempfile.TemporaryDirectory() as scratch:
         save_path = save or Path(scratch) / "game.sav"
-        command = [str(program), str(path), "--frames", str(frames), "--save", str(save_path)]
+        command = [str(program), str(path), "--frames", str(frames), "--save", str(save_path), *args]
         result = run_program(command)
     return Run(result.returncode, tuple(result.stdout.splitlines()), result.stderr)
 
 
-def run_test(name: str, *, frames: int = 600, data: str = "", save: Path | None = None) -> Run:
-    return run_rom(build_test_rom(name, data), frames=frames, save=save)
+def run_test(
+    name: str, *, frames: int = 600, data: str = "", save: Path | None = None,
+    args: tuple[str, ...] = (),
+) -> Run:
+    return run_rom(build_test_rom(name, data), frames=frames, save=save, args=args)
