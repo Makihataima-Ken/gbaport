@@ -3,9 +3,10 @@
  * gba_render_line(rt, y) draws line y into rt->screen when the line's HDraw ends, before
  * the HBlank interrupt and HBlank DMA (as mGBA does), from the registers, VRAM and palette
  * as they are then: a game that changes them between lines gets its raster effects. Each
- * enabled background is drawn into a line of its own; then every pixel takes the colour
- * of the topmost background there (the lower priority number; between equals, the lower
- * background number), or the backdrop, palette entry 0. Forced blank draws white.
+ * enabled layer is drawn into a line of its own; then every pixel takes the colour of the
+ * topmost layer there, or the backdrop, palette entry 0. The lower priority number is on
+ * top; at equal priority sprites come before backgrounds, and BG0 before BG3. Forced blank
+ * draws white.
  *
  * Text backgrounds (BG0-BG3 in mode 0, BG0 and BG1 in mode 1) are 8x8 tiles named by a
  * map of 32x32 entries per 2 KiB screen block: 256 or 512 pixels each way, scrolled by
@@ -15,6 +16,16 @@
  * Rotation/scaling backgrounds (BG2 in mode 1, BG2 and BG3 in mode 2) are 128 to 1024
  * pixels square, of 256-colour tiles named by one-byte map entries. Outside the square
  * they are transparent, or wrap around when BGnCNT bit 13 says so.
+ *
+ * Sprites (OAM's 128 entries, in order) come in 12 sizes from 8x8 to 64x64, 16 or 256
+ * colours, with tiles laid out in 1D (DISPCNT bit 6) or in a 2D sheet 32 tiles wide; in
+ * the bitmap modes the tiles below 512 belong to the picture and are not drawn. A
+ * rotation/scaling sprite samples its tiles through one of 32 matrices kept in OAM, around
+ * its centre, in a box twice its size with "double size". Like mGBA, an earlier sprite
+ * wins at equal priority, a later sprite's transparent pixel still passes its lower
+ * priority number to the pixel below it, and a line takes sprites only while it has time:
+ * 1210 cycles (954 with "HBlank interval free"), a sprite costing its width, or 10 plus
+ * twice its box's width when it rotates.
  *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
@@ -28,8 +39,15 @@
 enum { W = GBA_SCREEN_WIDTH, H = GBA_SCREEN_HEIGHT };
 
 typedef struct {
-    uint16_t bg[4][W];  /* each background's colours on this line, or CLEAR */
+    uint16_t bg[4][W];         /* each background's colours on this line, or CLEAR */
+    uint16_t obj[W];           /* the sprites' colours, or CLEAR */
+    uint8_t obj_priority[W];   /* the sprites' priority; 4 where none drew */
 } Layers;
+
+static const uint8_t SPRITE_SIZES[16][2] = {  /* by shape * 4 + size: width, height */
+    {8, 8}, {16, 16}, {32, 32}, {64, 64}, {16, 8}, {32, 8}, {32, 16}, {64, 32},
+    {8, 16}, {8, 32}, {16, 32}, {32, 64}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
+};
 
 static uint16_t halfword(const uint8_t *memory, uint32_t offset)
 {
@@ -156,7 +174,105 @@ static void bitmap_line(const GbaRuntime *rt, uint16_t *out, uint32_t mode)
     }
 }
 
-/* Every pixel: the topmost background with a colour there, or the backdrop. */
+/* One sprite's part of line y (in_y: the line within its box). */
+static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, Layers *layers)
+{
+    uint16_t a0 = halfword(entry, 0), a1 = halfword(entry, 2), a2 = halfword(entry, 4);
+    uint16_t control = IO(rt, GBA_REG_DISPCNT);
+    int width = SPRITE_SIZES[(a0 >> 14) * 4 + (a1 >> 14)][0];
+    int height = SPRITE_SIZES[(a0 >> 14) * 4 + (a1 >> 14)][1];
+    int affine = a0 & 0x100, twice = affine && (a0 & 0x200);
+    int box_w = width << twice, box_h = height << twice;
+    int left = (int)(a1 & 0x1FF) - ((a1 & 0x100) ? 512 : 0);
+    unsigned colors256 = a0 & 0x2000, one_d = control & 0x40, tile = a2 & 0x3FF;
+    if ((control & 7) >= 3 && tile < 512)
+        return;
+    if (colors256 && !one_d)
+        tile &= ~1u;
+    uint32_t start = tile * 32;
+    uint32_t stride = one_d ? (uint32_t)width * (colors256 ? 8 : 4) / 8 : 0x80;  /* per line of tiles */
+    uint32_t across = one_d ? 0x7FFF : 0x3FF, row_base = one_d ? 0 : start & 0x7C00;
+    uint32_t palette = 0x200 + (colors256 ? 0 : (a2 >> 12) * 32u);
+    uint8_t priority = (a2 >> 10) & 3;
+    int16_t pa = 0, pb = 0, pc = 0, pd = 0;
+    if (affine) {
+        const uint8_t *matrix = rt->oam + ((a1 >> 9) & 31) * 32;
+        pa = (int16_t)halfword(matrix, 6);
+        pb = (int16_t)halfword(matrix, 14);
+        pc = (int16_t)halfword(matrix, 22);
+        pd = (int16_t)halfword(matrix, 30);
+    }
+    for (int x = left < 0 ? 0 : left; x < left + box_w && x < W; x++) {
+        int tx = x - left, ty = in_y;
+        if (affine) {
+            int32_t cx = tx - box_w / 2, cy = in_y - box_h / 2;
+            tx = (pa * cx + pb * cy + (width << 7)) >> 8;
+            ty = (pc * cx + pd * cy + (height << 7)) >> 8;
+            if (tx < 0 || ty < 0 || tx >= width || ty >= height)
+                continue;
+        } else {
+            if (a1 & 0x1000)
+                tx = width - 1 - tx;
+            if (a1 & 0x2000)
+                ty = height - 1 - ty;
+        }
+        uint32_t x_part, y_part;
+        if (colors256) {
+            x_part = (uint32_t)(tx & ~7) * 8 + (uint32_t)(tx & 7);
+            y_part = (uint32_t)(ty & ~7) * stride + (uint32_t)(ty & 7) * 8;
+        } else {
+            x_part = (uint32_t)(tx & ~7) * 4 + (uint32_t)(tx & 7) / 2;
+            y_part = (uint32_t)(ty & ~7) * stride + (uint32_t)(ty & 7) * 4;
+        }
+        unsigned color = rt->vram[0x10000 + ((y_part + row_base + ((x_part + start) & across)) & 0x7FFF)];
+        if (!colors256)
+            color = tx & 1 ? color >> 4 : color & 15;
+        if (layers->obj_priority[x] <= priority)
+            continue;  /* an earlier sprite, or one with a lower priority number, is on top */
+        if (color) {
+            layers->obj[x] = color_at(rt->palette, palette + color * 2);
+            layers->obj_priority[x] = priority;
+        } else if (layers->obj[x] != CLEAR) {
+            layers->obj_priority[x] = priority;  /* the transparent pixel still passes its priority */
+        }
+    }
+}
+
+/* Line y of the sprite layer. */
+static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
+{
+    for (int x = 0; x < W; x++) {
+        layers->obj[x] = CLEAR;
+        layers->obj_priority[x] = 4;
+    }
+    int time = IO(rt, GBA_REG_DISPCNT) & 0x20 ? 954 : 1210;
+    for (int i = 0; i < 128; i++) {
+        const uint8_t *entry = rt->oam + i * 8;
+        uint16_t a0 = halfword(entry, 0), a1 = halfword(entry, 2);
+        int affine = a0 & 0x100;
+        if (!affine && (a0 & 0x200))
+            continue;  /* hidden */
+        int width = SPRITE_SIZES[(a0 >> 14) * 4 + (a1 >> 14)][0];
+        int height = SPRITE_SIZES[(a0 >> 14) * 4 + (a1 >> 14)][1];
+        int twice = affine && (a0 & 0x200);
+        int top = a0 & 0xFF, left = a1 & 0x1FF, box_w = width << twice, box_h = height << twice;
+        if ((top >= H && top + box_h < 228) || (left >= W && left + box_w < 512))
+            continue;  /* nowhere on the screen */
+        int bottom = top + box_h;
+        if ((y < top && (bottom < 256 || y >= bottom - 256)) || y >= bottom)
+            continue;  /* not on this line */
+        int in_y = y - top;
+        if (affine ? in_y < 0 : top + height >= 256)
+            in_y += 256;  /* the sprite wraps past line 255 */
+        if (((a0 >> 10) & 3) != 2)  /* OBJ window sprites draw no colour */
+            sprite_line(rt, entry, in_y, layers);
+        time -= affine ? 10 + box_w * 2 : width;
+        if (time <= 0)
+            break;
+    }
+}
+
+/* Every pixel: the topmost layer with a colour there, or the backdrop. */
 static void compose(const GbaRuntime *rt, const Layers *layers, unsigned enabled, uint16_t *row)
 {
     uint16_t backdrop = color_at(rt->palette, 0);
@@ -164,6 +280,10 @@ static void compose(const GbaRuntime *rt, const Layers *layers, unsigned enabled
         row[x] = backdrop;
         int found = 0;
         for (unsigned priority = 0; priority < 4 && !found; priority++) {
+            if ((enabled & 0x10) && layers->obj_priority[x] == priority && layers->obj[x] != CLEAR) {
+                row[x] = layers->obj[x];
+                found = 1;
+            }
             for (int n = 0; n < 4 && !found; n++) {
                 if ((enabled & (1u << n)) && (IO(rt, 0x08 + 2 * n) & 3) == priority &&
                     layers->bg[n][x] != CLEAR) {
@@ -204,6 +324,10 @@ void gba_render_line(GbaRuntime *rt, int y)
     if (mode >= 3 && mode <= 5 && (control & 0x400)) {
         bitmap_line(rt, layers.bg[2], mode);
         enabled |= 1u << 2;
+    }
+    if (control & 0x1000) {
+        sprites_line(rt, y, &layers);
+        enabled |= 0x10;
     }
     compose(rt, &layers, enabled, row);
     for (int n = 0; n < 2; n++) {
