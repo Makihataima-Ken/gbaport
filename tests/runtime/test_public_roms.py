@@ -51,7 +51,7 @@ def failed_test(name: str) -> int:
 
 
 @pytest.mark.parametrize(
-    "name", ["memory", "none"]
+    "name", ["memory", "bios", "none"]
 )
 def test_jsmolka_rom_passes(name):
     failed = failed_test(name)

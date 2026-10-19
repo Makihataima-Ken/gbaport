@@ -141,14 +141,14 @@ static void deliver(GbaRuntime *rt)
     ctx->r[0] = 0x04000000u;
     ctx->r[14] = BIOS_IRQ_RETURN;
     ctx->cycles += 40;  /* the BIOS's IRQ entry and exit */
-    rt->bios_bus = 0xE55EC002u;
+    rt->bios_bus = 0xE25EF004u;  /* the opcode at 0x13C, fetched while the handler runs */
     gba_call(ctx, handler, BIOS_IRQ_RETURN);
     sp = ctx->r[13];
     for (int i = 0; i < 6; i++)
         ctx->r[saved[i]] = gba_read32(ctx, sp + 4 * i);
     ctx->r[13] = sp + 24;
     gba_restore_cpsr(ctx);
-    rt->bios_bus = 0xE25EF004u;
+    rt->bios_bus = 0xE55EC002u;  /* the opcode at 0x144, fetched after it returns */
     gba_reschedule(rt);
 }
 
