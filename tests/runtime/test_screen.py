@@ -1,4 +1,4 @@
-"""The picture the hosts show: the bitmap modes, until the scanline renderer (Plan 5)."""
+"""The picture the hosts show, for the bitmap modes (the other layers: test_render_*.py)."""
 
 import pytest
 from romtest import read_bmp, run_test
@@ -34,7 +34,6 @@ def expected(dispcnt: int) -> list[int]:
     0x0414,  # mode 4, page 1 (bitmap.c draws only the page it shows)
     0x0415,  # mode 5, page 1: 160x128, the rest is backdrop
     0x0003,  # mode 3 with BG2 off: backdrop
-    0x0100,  # mode 0 (tiles): backdrop until the renderer arrives
     0x0483,  # forced blank: white
 ])
 def test_the_screen_shows_the_bitmap_modes(tmp_path, dispcnt):

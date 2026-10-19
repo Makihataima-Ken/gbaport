@@ -7,6 +7,11 @@
  * of the topmost background there (the lower priority number; between equals, the lower
  * background number), or the backdrop, palette entry 0. Forced blank draws white.
  *
+ * Text backgrounds (BG0-BG3 in mode 0, BG0 and BG1 in mode 1) are 8x8 tiles named by a
+ * map of 32x32 entries per 2 KiB screen block: 256 or 512 pixels each way, scrolled by
+ * BGnHOFS/BGnVOFS with wrap-around. An entry holds the tile number, flips and (for 16-colour
+ * tiles) a palette bank. Tile data past background VRAM (0x10000) is transparent.
+ *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
@@ -22,9 +27,14 @@ typedef struct {
     uint16_t bg[4][W];  /* each background's colours on this line, or CLEAR */
 } Layers;
 
+static uint16_t halfword(const uint8_t *memory, uint32_t offset)
+{
+    return (uint16_t)(memory[offset] | memory[offset + 1] << 8);
+}
+
 static uint16_t color_at(const uint8_t *memory, uint32_t offset)
 {
-    return (uint16_t)((memory[offset] | memory[offset + 1] << 8) & 0x7FFF);
+    return halfword(memory, offset) & 0x7FFF;
 }
 
 /* BGxX or BGxY (offset of its low half): a signed 28-bit 20.8 fixed-point value. */
@@ -49,6 +59,47 @@ void gba_render_reference_write(GbaRuntime *rt, uint32_t offset)
         rt->affine_x[n] = reference(rt, 0x28 + 0x10 * n);
     else
         rt->affine_y[n] = reference(rt, 0x2C + 0x10 * n);
+}
+
+/* A text background's line. */
+static void text_line(const GbaRuntime *rt, int n, int y, uint16_t *out)
+{
+    uint16_t control = IO(rt, 0x08 + 2 * n);
+    uint32_t char_base = ((control >> 2) & 3) * 0x4000u;
+    uint32_t screen_base = ((control >> 8) & 31) * 0x800u;
+    unsigned size = control >> 14, colors256 = control & 0x80;
+    unsigned in_y = (unsigned)(y + IO(rt, 0x12 + 4 * n)) & 0x1FF;
+    unsigned hofs = IO(rt, 0x10 + 4 * n);
+    uint32_t row = (in_y & 0xF8) * 4;  /* the map entry that starts this row of tiles */
+    if (size == 2)
+        row += (in_y & 0x100) * 4;  /* 256x512: the lower half is the next block */
+    else if (size == 3)
+        row += (in_y & 0x100) * 8;  /* 512x512: two blocks further */
+    for (int x = 0; x < W; x++) {
+        unsigned in_x = (x + hofs) & 0x1FF;
+        uint32_t index = row + (in_x & 0xF8) / 8;
+        if (size & 1)
+            index += (in_x & 0x100) * 4;  /* the right half is the next block */
+        uint32_t entry = halfword(rt->vram, screen_base + index * 2);
+        unsigned tx = in_x & 7, ty = in_y & 7;
+        if (entry & 0x400)
+            tx = 7 - tx;
+        if (entry & 0x800)
+            ty = 7 - ty;
+        uint32_t tile = entry & 0x3FF, address;
+        out[x] = CLEAR;
+        if (colors256)
+            address = char_base + tile * 64 + ty * 8 + tx;
+        else
+            address = char_base + tile * 32 + ty * 4 + tx / 2;
+        if (address >= 0x10000)
+            continue;
+        unsigned color = rt->vram[address];
+        if (!colors256)
+            color = tx & 1 ? color >> 4 : color & 15;
+        if (color)
+            out[x] = color_at(rt->palette, (colors256 ? color : (entry >> 12) * 16 + color) * 2);
+    }
 }
 
 /* Modes 3-5: BG2 is a bitmap, walked like the rotation/scaling backgrounds. */
@@ -106,6 +157,13 @@ void gba_render_line(GbaRuntime *rt, int y)
     }
     static Layers layers;
     unsigned enabled = 0;
+    for (int n = 0; n < 4; n++) {
+        int text = mode == 0 || (mode == 1 && n < 2);
+        if (text && (control & (0x100u << n))) {
+            text_line(rt, n, y, layers.bg[n]);
+            enabled |= 1u << n;
+        }
+    }
     if (mode >= 3 && mode <= 5 && (control & 0x400)) {
         bitmap_line(rt, layers.bg[2], mode);
         enabled |= 1u << 2;
