@@ -21,7 +21,10 @@ The lifter tests compile C with clang (`winget install LLVM.LLVM`) and compare a
 Unicorn; their test binaries are cached in the system temp folder (`gbaport-liftcache`).
 The runtime tests build small GBA test ROMs from C (`tests/gbaroms`) with clang and
 ld.lld, recompile them and run them natively; ROMs and builds are cached in
-`gbaport-romcache`.
+`gbaport-romcache`. They also download and run jsmolka's CPU test ROMs (MIT licence;
+`tests/publicroms/jsmolka` has their configs), so the first run needs a network
+connection. The window tests build SDL3 the first time (see below) and run with SDL's
+dummy video driver, so no window opens.
 
 ## Commands
 
@@ -38,14 +41,38 @@ as `uv run python -m gbaport.cli ...`.
 ## Running a recompiled game
 
 `gbaport build` recompiles the game and compiles it with the runtime into
-`games/<game_code>/build/<game_code>.exe`. Run it with the ROM it was built from:
+`games/<game_code>/build/<game_code>.exe`, which runs the game in a window. Run it with
+the ROM it was built from:
 
-    games/XXXX/build/XXXX.exe roms/mygame.gba [--frames N] [--save PATH]
+    games/XXXX/build/XXXX.exe roms/mygame.gba [--save PATH] [--scale N] [--fast]
 
-It runs without a window for now (the desktop window comes in Plan 4c). Lines the game
-prints through mGBA's debug log go to stdout. It exits with 0 when the game executes the
-BIOS Stop call, 2 for bad arguments, a different ROM or an unusable save file, 3 for a
-runtime error, and 4 when `--frames` runs out.
+Keys: arrows, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select. A gamepad
+works too: its right face button is A, the bottom one B. The game runs at the GBA's 59.73
+frames a second (`--fast`: as fast as it can), and the picture grows with the window by
+whole steps (`--scale`: the starting size, 3 by default). Until the renderer arrives
+(Plan 5) only the bitmap modes are drawn; a game that draws with tiles shows its backdrop
+colour. Closing the window ends the run.
+
+The first build also builds SDL3 3.4.18 from source, once, into `%LOCALAPPDATA%\gbaport`
+(`GBAPORT_CACHE` moves it). That needs CMake and Ninja (the Visual Studio Build Tools
+include both; elsewhere `winget install Kitware.CMake Ninja-build.Ninja`), a network
+connection, and a minute or two.
+
+`gbaport build --host headless` builds `<game_code>-headless.exe` instead, which runs
+without a window, for tests and scripts. Both programs take:
+
+- `--frames N`: end after N frames;
+- `--save PATH`: the save file (below);
+- `--press FRAME:KEYS`: hold KEYS from that frame on (repeatable). KEYS are A, B, SELECT,
+  START, RIGHT, LEFT, UP, DOWN, R and L joined with `+`, or `none`;
+- `--registers`: print the CPU registers when the run ends;
+- `--screenshot PATH`: save the last picture as a BMP file.
+
+Lines the game prints through mGBA's debug log go to stdout. The exit status is 0 when
+the window is closed, or when the game executes the BIOS Stop call and nothing wakes it
+(the window waits for a key instead, unless `--frames` limits the run); 2 for bad
+arguments, a different ROM or an unusable save file; 3 for a runtime error; 4 when
+`--frames` runs out.
 
 The game's save chip (SRAM, Flash or EEPROM, as its library ID string or `game.toml`'s
 `[rom] save` says) lives in a save file: `--save PATH`, by default the ROM's path with

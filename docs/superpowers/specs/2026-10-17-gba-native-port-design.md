@@ -199,9 +199,10 @@ Needed later:
 
 - Unicorn 2.1.3 (Python dev dependency, the lifter's oracle) — added in Plan 3.
 - CMake ≥ 3.28 and Ninja (bundled with the MSVC Build Tools; elsewhere
-  `winget install Kitware.CMake Ninja-build.Ninja`) — Plan 4c. Plan 4a builds with clang
-  directly.
-- SDL3 (fetched by CMake `FetchContent`) — Plan 4c.
+  `winget install Kitware.CMake Ninja-build.Ninja`) — Plan 4c, for SDL3. Games still
+  build with clang directly.
+- SDL3 3.4.18 (fetched by CMake `FetchContent`, built once as a static library into the
+  user's cache folder) — Plan 4c.
 - Android SDK + NDK r27 or newer (Android Studio or `sdkmanager`) — Plan 8.
 - macOS with Xcode 16 or newer, or a macOS CI runner, plus an Apple developer account — Plan 9.
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
