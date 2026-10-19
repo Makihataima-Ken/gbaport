@@ -46,6 +46,7 @@
   - mGBA draws the sprites that make the OBJ window without mosaic.
   - mGBA restarts a 256-colour text background's horizontal mosaic where a window's span starts.
   - mGBA stops a rotating sprite's line at the first texel outside it, after an approximate clip at its left edge. The renderer tests every pixel of the box.
+  - mGBA rounds the amount it darkens by up in some channels, so a partial darkening (BLDY 1-15) can be one step darker there. The renderer uses GBATEK's formula, rounded down; `test_partial_darkening_follows_gbatek` checks it against that formula instead of mGBA. (Added by the final review's fix pass: fades in games will differ from mGBA by one step per channel.)
 - **Not modelled:**
   - The delay of a few lines before a background that is switched on mid-frame appears (mGBA models it).
   - Green swap (register 0x04000002).

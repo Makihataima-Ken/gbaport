@@ -1,8 +1,10 @@
 """Colour special effects, compared with mGBA: alpha blending, brightening, darkening,
-semi-transparent sprites, the backdrop as a target, and windows that switch effects off."""
+semi-transparent sprites, the backdrop as a target, and windows that switch effects off.
+Partial darkening is checked against GBATEK's formula instead: mGBA rounds it differently."""
 
 import pytest
-from rendertest import assert_test_rom_matches, obj, scene
+from rendertest import assert_test_rom_matches, obj, our_picture, scene
+from romtest import build_test_rom
 
 DISPCNT, BG0CNT, BG1CNT, WIN0H, WIN0V, WININ, WINOUT = 0x000, 0x008, 0x00A, 0x040, 0x044, 0x048, 0x04A
 BLDCNT, BLDALPHA, BLDY = 0x050, 0x052, 0x054
@@ -43,3 +45,22 @@ SCENES = {
 @pytest.mark.parametrize("data", SCENES.values(), ids=SCENES.keys())
 def test_colour_effects_look_like_mgba(data):
     assert_test_rom_matches("scene", data)
+
+
+def darkened(color: int, evy: int) -> int:
+    """GBATEK's darkening of a GBA colour: every 5-bit channel c becomes c - c * EVY / 16,
+    the amount rounded down."""
+    out = 0
+    for shift in (0, 5, 10):
+        c = color >> shift & 31
+        out |= (c - c * evy // 16) << shift
+    return out
+
+
+@pytest.mark.parametrize("evy", [1, 8, 15])
+def test_partial_darkening_follows_gbatek(evy):
+    plain = our_picture(build_test_rom("scene", effects()), 30)
+    every_layer = BG0 | BG1 | BG2 | BG3 | OBJ | BD
+    darkening = effects((BLDCNT, every_layer | DARKEN), (BLDY, evy))
+    dark = our_picture(build_test_rom("scene", darkening), 30)
+    assert dark == [darkened(color, evy) for color in plain]

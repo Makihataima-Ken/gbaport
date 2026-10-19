@@ -36,11 +36,13 @@
  * Colour special effects (BLDCNT) work on the topmost layer when it is a 1st target and
  * the window allows effects: alpha blending with the layer right below it, when that is a
  * 2nd target (BLDALPHA's factors, at most 16/16), or brightening or darkening (BLDY, at
- * most 16/16), in 5 bits per channel like the GBA. A semi-transparent sprite on top of a
- * 2nd target blends with it whatever BLDCNT's effect and the window say. Anywhere else it
- * is brightened or darkened when sprites are a 1st target, and also, as in mGBA, when an
- * enabled background or the backdrop is a 2nd target (GBATEK only says such sprites are
- * always 1st targets).
+ * most 16/16), in 5 bits per channel like the GBA: c + (31 - c) * EVY / 16 and
+ * c - c * EVY / 16, rounded down, as GBATEK gives them. (mGBA rounds the amount it darkens
+ * by up in some channels, so its partial darkening can be one step darker.) A
+ * semi-transparent sprite on top of a 2nd target blends with it whatever BLDCNT's effect
+ * and the window say. Anywhere else it is brightened or darkened when sprites are a 1st
+ * target, and also, as in mGBA, when an enabled background or the backdrop is a 2nd
+ * target (GBATEK only says such sprites are always 1st targets).
  *
  * Mosaic (MOSAIC, for backgrounds with BGnCNT bit 6 and sprites with OAM bit 12) shows
  * blocks: every line repeats the first line of its group of lines, every pixel the first

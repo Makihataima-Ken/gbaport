@@ -5,8 +5,9 @@
  * Runs FRAMES frames from power-on (mGBA's own BIOS replacement, no BIOS file) and writes
  * the last picture to OUT as 240x160 little-endian 16-bit GBA colours (0BBBBBGGGGGRRRRR),
  * the form the runtime's tests compare in. mGBA is built with 16-bit colour, so it works
- * in GBA colours throughout, blending in 5 bits per channel like the GBA. mGBA's own
- * messages are dropped. */
+ * in GBA colours throughout, blending in 5 bits per channel like the GBA (its partial
+ * darkening rounds differently; test_render_effects.py checks that one against GBATEK's
+ * formula). mGBA's own messages are dropped. */
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
