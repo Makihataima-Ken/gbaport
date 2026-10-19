@@ -37,8 +37,10 @@
  * the window allows effects: alpha blending with the layer right below it, when that is a
  * 2nd target (BLDALPHA's factors, at most 16/16), or brightening or darkening (BLDY, at
  * most 16/16), in 5 bits per channel like the GBA. A semi-transparent sprite on top of a
- * 2nd target blends with it whatever BLDCNT's effect and the window say; anywhere else it
- * takes BLDCNT's effect like any other sprite (as GBATEK describes and mGBA does).
+ * 2nd target blends with it whatever BLDCNT's effect and the window say. Anywhere else it
+ * is brightened or darkened when sprites are a 1st target, and also, as in mGBA, when an
+ * enabled background or the backdrop is a 2nd target (GBATEK only says such sprites are
+ * always 1st targets).
  *
  * Mosaic (MOSAIC, for backgrounds with BGnCNT bit 6 and sprites with OAM bit 12) shows
  * blocks: every line repeats the first line of its group of lines, every pixel the first
@@ -430,6 +432,9 @@ static void compose(const GbaRuntime *rt, const Layers *layers, unsigned all, in
     uint16_t targets = IO(rt, 0x50), factors = IO(rt, 0x52);
     unsigned effect = (targets >> 6) & 3, eva = weight(factors), evb = weight(factors >> 8);
     unsigned evy = weight(IO(rt, 0x54));
+    /* a semi-transparent sprite is a 1st target for brightness when an enabled background
+     * or the backdrop is a 2nd target (as mGBA does) */
+    unsigned any_second = (targets >> 8) & (0x20u | ((IO(rt, GBA_REG_DISPCNT) >> 8) & 0xFu));
     uint8_t region[W];
     window_line(rt, y, layers, region);
     for (int x = 0; x < W; x++) {
@@ -452,7 +457,8 @@ static void compose(const GbaRuntime *rt, const Layers *layers, unsigned all, in
         int second = (targets >> 8) & (1u << layer[1]);
         if (layer[0] == 4 && layers->obj_semi[x] && second) {
             color[0] = mix(color[0], color[1], eva, evb);
-        } else if ((region[x] & 0x20) && (targets & (1u << layer[0]))) {
+        } else if ((region[x] & 0x20) && ((targets & (1u << layer[0])) ||
+                                          (layer[0] == 4 && layers->obj_semi[x] && any_second))) {
             if (effect == 1 && second)
                 color[0] = mix(color[0], color[1], eva, evb);
             else if (effect >= 2)

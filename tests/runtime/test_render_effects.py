@@ -27,6 +27,12 @@ SCENES = {
     "semi-transparent-sprites": effects((BLDCNT, BG1 << 8 | BD << 8), (BLDALPHA, 4 << 8 | 12)),
     "semi-transparent-sprites-with-brighten": effects((BLDCNT, OBJ | BRIGHTEN | (BG0 | BG1) << 8),
                                                       (BLDALPHA, 9 << 8 | 7), (BLDY, 12)),
+    # sprites are no 1st target here, but mGBA brightens or darkens the semi-transparent
+    # ones because a layer is a 2nd target
+    "semi-transparent-brighten-with-a-2nd-target": effects((BLDCNT, BRIGHTEN | BG1 << 8),
+                                                           (BLDY, 12)),
+    "semi-transparent-darken-with-a-2nd-target": effects((BLDCNT, BG0 | DARKEN | BG1 << 8),
+                                                         (BLDY, 16)),
     "window-switches-effects-off": effects(
         (BLDCNT, BG0 | OBJ | ALPHA | (BG1 | BD) << 8), (BLDALPHA, 10 << 8 | 6),
         (WIN0H, 40 << 8 | 180), (WIN0V, 30 << 8 | 130), (WININ, 0x001F), (WINOUT, 0x003F),
