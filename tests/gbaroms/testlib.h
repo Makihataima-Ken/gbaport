@@ -24,6 +24,7 @@
 #define REG_TM_CNT_L(n) REG16(0x04000100 + 4 * (n))
 #define REG_TM_CNT_H(n) REG16(0x04000102 + 4 * (n))
 #define REG_KEYINPUT REG16(0x04000130)
+#define REG_KEYCNT   REG16(0x04000132)
 #define REG_IE       REG16(0x04000200)
 #define REG_IF       REG16(0x04000202)
 #define REG_WAITCNT  REG16(0x04000204)
@@ -34,6 +35,11 @@
 enum {
     IRQ_VBLANK = 1, IRQ_HBLANK = 2, IRQ_VCOUNT = 4, IRQ_TIMER0 = 8,
     IRQ_DMA0 = 0x100, IRQ_KEYPAD = 0x1000,
+};
+
+enum {  /* KEYINPUT and KEYCNT bits */
+    KEY_A = 1, KEY_B = 2, KEY_SELECT = 4, KEY_START = 8, KEY_RIGHT = 0x10, KEY_LEFT = 0x20,
+    KEY_UP = 0x40, KEY_DOWN = 0x80, KEY_R = 0x100, KEY_L = 0x200,
 };
 
 /* Counted by the IRQ handler that irq_init() installs; irq_cpsr is the CPSR it ran with. */

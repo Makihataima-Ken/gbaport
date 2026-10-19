@@ -79,7 +79,7 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
     case 0x00: gba_reset(rt); break;
     case 0x01: register_ram_reset(rt, ctx->r[0]); break;
     case 0x02: gba_halt(rt); break;
-    case 0x03: gba_end(rt, GBA_END_STOPPED); break;  /* nothing can wake a headless run */
+    case 0x03: gba_stop(rt); break;
     case 0x04: intr_wait(rt, ctx->r[0], ctx->r[1]); break;
     case 0x05:
         ctx->r[0] = ctx->r[1] = 1;
@@ -112,8 +112,9 @@ void gba_swi(GbaCtx *ctx, uint32_t number)
     case 0x26: gba_hard_reset(rt); break;
     case 0x27:  /* CustomHalt: r2's low byte goes to HALTCNT */
         if (ctx->r[2] & 0x80)
-            gba_end(rt, GBA_END_STOPPED);
-        gba_halt(rt);
+            gba_stop(rt);
+        else
+            gba_halt(rt);
         break;
     case 0x1A: case 0x1B: case 0x1C: case 0x1D: case 0x1E:
     case 0x20: case 0x21: case 0x22: case 0x23: case 0x24:

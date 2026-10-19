@@ -91,6 +91,8 @@ static void line_end(GbaRuntime *rt, uint64_t when)
     IO(rt, GBA_REG_DISPSTAT) = stat;
     if (match && (stat & 0x20))
         gba_request_irq(rt, GBA_IRQ_VCOUNT);
+    if (line == 0)
+        gba_keypad_check(rt);  /* at the start of every frame */
     if (line == GBA_VISIBLE_LINES) {
         if (stat & 0x08)
             gba_request_irq(rt, GBA_IRQ_VBLANK);
@@ -156,6 +158,20 @@ void gba_events(GbaCtx *ctx)
 {
     GbaRuntime *rt = gba_rt(ctx);
     advance(rt);
+    while (irq_ready(rt))
+        deliver(rt);
+}
+
+/* Stop: the CPU, the clocks and the display stand still until a keypad, cartridge or
+ * link interrupt that IE enables is requested. Only the keypad can request one here, and
+ * only the host can press keys: it waits for input in its stopped callback. */
+void gba_stop(GbaRuntime *rt)
+{
+    const uint16_t wake = GBA_IRQ_KEYPAD | GBA_IRQ_GAMEPAK | GBA_IRQ_SERIAL;
+    gba_keypad_check(rt);  /* keys held already wake it, as at a frame start */
+    while (!(IO(rt, GBA_REG_IE) & IO(rt, GBA_REG_IF) & wake))
+        if (!rt->host.stopped || !rt->host.stopped(rt, rt->host.user))
+            gba_end(rt, GBA_END_STOPPED);
     while (irq_ready(rt))
         deliver(rt);
 }

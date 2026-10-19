@@ -141,7 +141,11 @@ void gba_fail(GbaRuntime *rt, const char *fmt, ...)
     gba_end(rt, GBA_END_ERROR);
 }
 
-void gba_set_keys(GbaRuntime *rt, uint16_t pressed) { rt->keys_pressed = pressed & 0x3FF; }
+void gba_set_keys(GbaRuntime *rt, uint16_t pressed)
+{
+    rt->keys_pressed = pressed & 0x3FF;
+    gba_keypad_check(rt);
+}
 
 /* ---- hooks from gba_cpu.h: what recompiled code cannot handle itself -------------- */
 

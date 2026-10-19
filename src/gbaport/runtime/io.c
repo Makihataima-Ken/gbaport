@@ -2,7 +2,7 @@
  *
  * Registers are kept by halfword and most read back what was written. The exceptions:
  * - DISPSTAT's status bits and VCOUNT belong to the scheduler; writes cannot change them.
- * - KEYINPUT comes from the host.
+ * - KEYINPUT comes from the host; KEYCNT can make the keys request an interrupt.
  * - IF clears the bits written as 1.
  * - DMA source, destination and count registers are write-only: they read as 0.
  * - Writing IE, IF or IME can make an interrupt deliverable.
@@ -15,6 +15,27 @@
 
 #define IO(rt, offset) ((rt)->io[(offset) >> 1])
 
+/* The keypad interrupt, as mGBA requests it: KEYCNT bit 14 enables it and bits 0-9 choose
+ * keys. With bit 15 clear, any chosen key held requests it at every check (frame start,
+ * new keys from the host, KEYCNT writes, Stop); with bit 15 set, all of them must be held,
+ * and only a change of keys requests it again. */
+void gba_keypad_check(GbaRuntime *rt)
+{
+    uint16_t control = IO(rt, GBA_REG_KEYCNT), chosen = control & 0x3FF;
+    if (!(control & 0x4000))
+        return;
+    uint16_t last = rt->keys_last, keys = rt->keys_pressed;
+    rt->keys_last = keys;
+    if (control & 0x8000 && (keys & chosen) == chosen) {
+        if (keys != last)
+            gba_request_irq(rt, GBA_IRQ_KEYPAD);
+    } else if (!(control & 0x8000) && (keys & chosen)) {
+        gba_request_irq(rt, GBA_IRQ_KEYPAD);
+    } else {
+        rt->keys_last = 0x400;
+    }
+}
+
 void gba_reset_io(GbaRuntime *rt)
 {
     memset(rt->io, 0, sizeof rt->io);
@@ -26,6 +47,7 @@ void gba_reset_io(GbaRuntime *rt)
     IO(rt, 0x088) = 0x0200;                  /* SOUNDBIAS */
     IO(rt, GBA_REG_RCNT) = 0x8000;
     IO(rt, GBA_REG_POSTFLG) = 0x0001;        /* booted */
+    rt->keys_last = 0x400;
 }
 
 static int dma_channel(uint32_t offset)  /* the channel whose CNT_H is at offset, or -1 */
@@ -86,6 +108,12 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
         IO(rt, offset) = merged & 1;
         gba_irq_changed(rt);
         return;
+    case GBA_REG_KEYCNT:
+        if (rt->keys_last < 0x400)  /* newly chosen keys count as changed (as in mGBA) */
+            rt->keys_last &= old | ~merged;
+        IO(rt, offset) = merged & 0xC3FF;
+        gba_keypad_check(rt);
+        return;
     case GBA_REG_WAITCNT:
         IO(rt, offset) = merged & 0x7FFF;  /* bit 15 reads 0: a GBA cartridge */
         return;
@@ -93,8 +121,9 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
         IO(rt, offset) = merged & 0x0001;
         if (mask & 0xFF00) {
             if (value & 0x8000)
-                gba_end(rt, GBA_END_STOPPED);  /* Stop: nothing wakes a headless run */
-            gba_halt(rt);
+                gba_stop(rt);
+            else
+                gba_halt(rt);
         }
         return;
     default:

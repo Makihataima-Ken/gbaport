@@ -26,7 +26,7 @@ RUNTIME_SOURCES = (
     "runtime.c", "memory.c", "io.c", "scheduler.c", "timers.c", "dma.c",
     "bios.c", "bios_math.c", "bios_memory.c", "bios_decompress.c", "save.c", "screen.c",
 )
-HOSTS = {"headless": "host_headless.c"}
+HOSTS = {"headless": ("host_common.c", "host_headless.c")}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c
 CFLAGS = ("-std=c11", "-O2", "-Wall", "-Werror", "-Wno-unused-label")
 SALTED_REBUILDS = 20  # how often a build Windows refuses to start is made again (8 was seen)
@@ -74,7 +74,7 @@ def compile_native(sources: Path, out: Path, name: str, host: str = "headless") 
     clang = find_clang()
     objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
-    units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in RUNTIME_SOURCES), RUNTIME / HOSTS[host]]
+    units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in (*RUNTIME_SOURCES, *HOSTS[host]))]
 
     def compile_unit(unit: Path) -> Path:
         obj = objects / f"{unit.stem}.o"

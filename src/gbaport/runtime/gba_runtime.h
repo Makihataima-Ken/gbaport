@@ -47,7 +47,7 @@ enum {  /* I/O register offsets from 0x04000000 */
 };
 
 typedef enum {
-    GBA_END_STOPPED = 0,  /* the game executed Stop and nothing can wake it (headless) */
+    GBA_END_STOPPED = 0,  /* the game executed Stop and the host had nothing to wake it */
     GBA_END_ERROR = 3,    /* see GbaRuntime.error */
     GBA_END_HOST = 4,     /* the host asked to end the run (gba_end) */
 } GbaEnd;
@@ -83,6 +83,10 @@ typedef struct {
     void (*frame)(GbaRuntime *rt, void *user);             /* at every VBlank start */
     void (*log)(GbaRuntime *rt, int level, const char *text, void *user);  /* mGBA debug log */
     void (*diag)(GbaRuntime *rt, const char *text, void *user);  /* runtime warnings */
+    /* The game executed Stop: wait for input and pass it on with gba_set_keys, then return
+     * 1 (the runtime calls again until a key wakes the game), or return 0 to end the run.
+     * Without this callback a Stop ends the run. */
+    int (*stopped)(GbaRuntime *rt, void *user);
     void *user;
 } GbaHost;
 
@@ -118,6 +122,7 @@ struct GbaRuntime {
     GbaTimer timer[4];
     GbaDma dma[4];
     uint16_t keys_pressed;               /* GBA key bits, 1 = pressed */
+    uint16_t keys_last;                  /* at the last keypad check; 0x400: no match */
     GbaSave save;
 
     char debug_text[0x101];
@@ -165,6 +170,8 @@ void gba_reschedule(GbaRuntime *rt);       /* after an event time changed */
 void gba_request_irq(GbaRuntime *rt, uint16_t bits);
 void gba_irq_changed(GbaRuntime *rt);      /* IE, IF or IME written */
 void gba_halt(GbaRuntime *rt);             /* until IE & IF, then deliver the interrupt */
+void gba_stop(GbaRuntime *rt);             /* until a key wakes the game (host.stopped) */
+void gba_keypad_check(GbaRuntime *rt);     /* may request the keypad interrupt */
 
 void gba_timer_write(GbaRuntime *rt, int n, uint16_t control);
 uint16_t gba_timer_counter(GbaRuntime *rt, int n);
