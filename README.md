@@ -56,7 +56,7 @@ the wrong size is refused and left as it is.
 Windows' Smart App Control judges every newly built program by its content and refuses
 some of them for good ("An Application Control policy has blocked this file"). `gbaport
 build` checks that the program starts and, when Windows refuses it, links it again with a
-few different bytes, up to 5 times.
+few different bytes, up to 20 times.
 
 The most common runtime error is code the recompiler did not find:
 

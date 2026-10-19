@@ -29,7 +29,7 @@ RUNTIME_SOURCES = (
 HOSTS = {"headless": "host_headless.c"}
 GENERATED_NAMES = ("gba_program.h", "gba_dispatch.c", "gba_rom.c", HEADER)  # plus gba_code_*.c
 CFLAGS = ("-std=c11", "-O2", "-Wall", "-Werror", "-Wno-unused-label")
-SALTED_REBUILDS = 5  # how often a build Windows refuses to start is made again
+SALTED_REBUILDS = 20  # how often a build Windows refuses to start is made again (8 was seen)
 
 
 SAVE_TYPES = {  # GbaSaveType in gba_runtime.h
