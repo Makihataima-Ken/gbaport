@@ -40,6 +40,13 @@
  * 2nd target blends with it whatever BLDCNT's effect and the window say; anywhere else it
  * takes BLDCNT's effect like any other sprite (as GBATEK describes and mGBA does).
  *
+ * Mosaic (MOSAIC, for backgrounds with BGnCNT bit 6 and sprites with OAM bit 12) shows
+ * blocks: every line repeats the first line of its group of lines, every pixel the first
+ * pixel of its group of pixels, groups counted from the screen's top-left corner. As in
+ * mGBA, a rotation/scaling or bitmap background whose group starts outside it tries again
+ * at the next pixel; a sprite's line comes from its first line inside the group, and a
+ * plain sprite widens to the end of its last group, repeating its edge.
+ *
  * The rotation/scaling backgrounds (BG2 and BG3 outside mode 0) walk their picture from
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
@@ -98,10 +105,19 @@ void gba_render_reference_write(GbaRuntime *rt, uint32_t offset)
         rt->affine_y[n] = reference(rt, 0x2C + 0x10 * n);
 }
 
+/* Horizontal mosaic: every group of `size` pixels shows its first pixel. */
+static void hold(uint16_t *line, unsigned size)
+{
+    for (int x = 0; size > 1 && x < W; x++)
+        line[x] = line[x - x % size];
+}
+
 /* A text background's line. */
 static void text_line(const GbaRuntime *rt, int n, int y, uint16_t *out)
 {
-    uint16_t control = IO(rt, 0x08 + 2 * n);
+    uint16_t control = IO(rt, 0x08 + 2 * n), mosaic = IO(rt, 0x4C);
+    if (control & 0x40)
+        y -= y % (int)(((mosaic >> 4) & 15) + 1);
     uint32_t char_base = ((control >> 2) & 3) * 0x4000u;
     uint32_t screen_base = ((control >> 8) & 31) * 0x800u;
     unsigned size = control >> 14, colors256 = control & 0x80;
@@ -137,60 +153,78 @@ static void text_line(const GbaRuntime *rt, int n, int y, uint16_t *out)
         if (color)
             out[x] = color_at(rt->palette, (colors256 ? color : (entry >> 12) * 16 + color) * 2);
     }
+    if (control & 0x40)
+        hold(out, (mosaic & 15) + 1u);
 }
 
-/* A rotation/scaling background's line (n = 2 or 3). */
-static void affine_line(const GbaRuntime *rt, int n, uint16_t *out)
+/* The colour of BG2/BG3's texel (tx, ty), or CLEAR; *outside says it is off a background
+ * that does not wrap around. mode is DISPCNT's: 1-2 tiles, 3-5 a bitmap (BG2). */
+static uint16_t texel(const GbaRuntime *rt, int n, uint32_t mode, int32_t tx, int32_t ty, int *outside)
 {
     uint16_t control = IO(rt, 0x08 + 2 * n);
+    *outside = 0;
+    if (mode >= 3) {
+        uint32_t page = IO(rt, GBA_REG_DISPCNT) & 0x10 ? 0xA000 : 0;
+        int width = mode == 5 ? 160 : 240, height = mode == 5 ? 128 : 160;
+        if (tx < 0 || ty < 0 || tx >= width || ty >= height) {
+            *outside = 1;
+            return CLEAR;
+        }
+        if (mode == 3)
+            return color_at(rt->vram, (uint32_t)(ty * 240 + tx) * 2);
+        if (mode == 5)
+            return color_at(rt->vram, page + (uint32_t)(ty * 160 + tx) * 2);
+        uint8_t index = rt->vram[page + (uint32_t)(ty * 240 + tx)];
+        return index ? color_at(rt->palette, index * 2u) : CLEAR;
+    }
+    int32_t size = 128 << (control >> 14);  /* pixels each way */
+    if (control & 0x2000) {  /* wrap around */
+        tx &= size - 1;
+        ty &= size - 1;
+    } else if (tx < 0 || ty < 0 || tx >= size || ty >= size) {
+        *outside = 1;
+        return CLEAR;
+    }
     uint32_t char_base = ((control >> 2) & 3) * 0x4000u;
     uint32_t screen_base = ((control >> 8) & 31) * 0x800u;
-    int32_t size = 128 << (control >> 14);  /* pixels each way */
-    int k = n - 2;
-    int32_t x = rt->affine_x[k], y = rt->affine_y[k];
-    int32_t dx = (int16_t)IO(rt, 0x20 + 0x10 * k), dy = (int16_t)IO(rt, 0x24 + 0x10 * k);
-    for (int i = 0; i < W; i++, x += dx, y += dy) {
-        int32_t tx = x >> 8, ty = y >> 8;
-        out[i] = CLEAR;
-        if (control & 0x2000) {  /* wrap around */
-            tx &= size - 1;
-            ty &= size - 1;
-        } else if (tx < 0 || ty < 0 || tx >= size || ty >= size) {
-            continue;
-        }
-        uint32_t tile = rt->vram[screen_base + (uint32_t)((ty >> 3) * (size >> 3) + (tx >> 3))];
-        uint8_t color = rt->vram[char_base + tile * 64 + (uint32_t)((ty & 7) * 8 + (tx & 7))];
-        if (color)
-            out[i] = color_at(rt->palette, color * 2u);
-    }
+    uint32_t tile = rt->vram[screen_base + (uint32_t)((ty >> 3) * (size >> 3) + (tx >> 3))];
+    uint8_t color = rt->vram[char_base + tile * 64 + (uint32_t)((ty & 7) * 8 + (tx & 7))];
+    return color ? color_at(rt->palette, color * 2u) : CLEAR;
 }
 
-/* Modes 3-5: BG2 is a bitmap, walked like the rotation/scaling backgrounds. */
-static void bitmap_line(const GbaRuntime *rt, uint16_t *out, uint32_t mode)
+/* A line of BG2 or BG3 outside mode 0, walked from its reference point. */
+static void affine_line(const GbaRuntime *rt, int n, int y, uint32_t mode, uint16_t *out)
 {
-    int32_t x = rt->affine_x[0], y = rt->affine_y[0];
-    int32_t dx = (int16_t)IO(rt, 0x20), dy = (int16_t)IO(rt, 0x24);  /* PA, PC */
-    uint32_t page = IO(rt, GBA_REG_DISPCNT) & 0x10 ? 0xA000 : 0;
-    int width = mode == 5 ? 160 : 240, height = mode == 5 ? 128 : 160;
-    for (int i = 0; i < W; i++, x += dx, y += dy) {
-        int tx = x >> 8, ty = y >> 8;
-        out[i] = CLEAR;
-        if (x < 0 || y < 0 || tx >= width || ty >= height)
+    int k = n - 2;
+    int32_t x = rt->affine_x[k], v = rt->affine_y[k];
+    int32_t dx = (int16_t)IO(rt, 0x20 + 0x10 * k), dy = (int16_t)IO(rt, 0x24 + 0x10 * k);
+    unsigned size = 1, wait = 0;
+    uint16_t held = CLEAR;
+    if (IO(rt, 0x08 + 2 * n) & 0x40) {  /* mosaic: from the group's first line */
+        uint16_t mosaic = IO(rt, 0x4C);
+        int back = y % (int)(((mosaic >> 4) & 15) + 1);
+        x -= back * (int16_t)IO(rt, 0x22 + 0x10 * k);  /* PB */
+        v -= back * (int16_t)IO(rt, 0x26 + 0x10 * k);  /* PD */
+        size = (mosaic & 15) + 1u;
+    }
+    for (int i = 0; i < W; i++, x += dx, v += dy) {
+        if (wait) {
+            wait--;
+            out[i] = held;
             continue;
-        if (mode == 3) {
-            out[i] = color_at(rt->vram, (uint32_t)(ty * 240 + tx) * 2);
-        } else if (mode == 4) {
-            uint8_t index = rt->vram[page + (uint32_t)(ty * 240 + tx)];
-            if (index)
-                out[i] = color_at(rt->palette, index * 2u);
-        } else {
-            out[i] = color_at(rt->vram, page + (uint32_t)(ty * 160 + tx) * 2);
+        }
+        int outside;
+        out[i] = texel(rt, n, mode, x >> 8, v >> 8, &outside);
+        if (!outside) {  /* a group that starts outside starts again at the next pixel */
+            held = out[i];
+            wait = size - 1;
         }
     }
 }
 
-/* One sprite's part of line y (in_y: the line within its box). */
-static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, Layers *layers)
+/* One sprite's part of line y (in_y: the line within its box; group: its mosaic's width). */
+static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, int group,
+                        Layers *layers)
 {
     uint16_t a0 = halfword(entry, 0), a1 = halfword(entry, 2), a2 = halfword(entry, 4);
     uint16_t control = IO(rt, GBA_REG_DISPCNT);
@@ -219,19 +253,32 @@ static void sprite_line(const GbaRuntime *rt, const uint8_t *entry, int in_y, La
         pc = (int16_t)halfword(matrix, 22);
         pd = (int16_t)halfword(matrix, 30);
     }
-    for (int x = left < 0 ? 0 : left; x < left + box_w && x < W; x++) {
-        int tx = x - left, ty = in_y;
+    int right = left + box_w;
+    if (group > 1 && right < W && right % group)
+        right += group - right % group;  /* mosaic: on to the end of the last group */
+    int first = left < 0 ? 0 : left;
+    int32_t cy = in_y - box_h / 2, cx = first - 1 - left - box_w / 2;
+    int held_x = (pa * cx + pb * cy + (width << 7)) >> 8;  /* a rotating sprite's sample */
+    int held_y = (pc * cx + pd * cy + (height << 7)) >> 8;
+    for (int x = first; x < right && x < W; x++) {
+        int tx, ty = in_y;
         if (affine) {
-            int32_t cx = tx - box_w / 2, cy = in_y - box_h / 2;
-            tx = (pa * cx + pb * cy + (width << 7)) >> 8;
-            ty = (pc * cx + pd * cy + (height << 7)) >> 8;
+            if (x % group == 0) {  /* every group samples where it starts */
+                cx = x - left - box_w / 2;
+                held_x = (pa * cx + pb * cy + (width << 7)) >> 8;
+                held_y = (pc * cx + pd * cy + (height << 7)) >> 8;
+            }
+            tx = held_x;
+            ty = held_y;
             if (tx < 0 || ty < 0 || tx >= width || ty >= height)
                 continue;
         } else {
+            tx = x - x % group - left;
             if (a1 & 0x1000)
                 tx = width - 1 - tx;
             if (a1 & 0x2000)
                 ty = height - 1 - ty;
+            tx = tx < 0 ? 0 : tx >= width ? width - 1 : tx;  /* mosaic past the edges */
         }
         uint32_t x_part, y_part;
         if (colors256) {
@@ -272,6 +319,8 @@ static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
         layers->obj_semi[x] = 0;
     }
     int time = IO(rt, GBA_REG_DISPCNT) & 0x20 ? 954 : 1210;
+    uint16_t mosaic = IO(rt, 0x4C);
+    int group_w = ((mosaic >> 8) & 15) + 1, group_h = ((mosaic >> 12) & 15) + 1;
     for (int i = 0; i < 128; i++) {
         const uint8_t *entry = rt->oam + i * 8;
         uint16_t a0 = halfword(entry, 0), a1 = halfword(entry, 2);
@@ -287,10 +336,18 @@ static void sprites_line(const GbaRuntime *rt, int y, Layers *layers)
         int bottom = top + box_h;
         if ((y < top && (bottom < 256 || y >= bottom - 256)) || y >= bottom)
             continue;  /* not on this line */
-        int in_y = y - top;
+        int line = y, mosaic_on = a0 & 0x1000;
+        if (mosaic_on && group_h > 1) {  /* the group's first line that is inside the sprite */
+            line = y - y % group_h;
+            if (line < top && top < H)
+                line = top;
+            if (line >= (bottom & 0xFF))
+                line = bottom - 1;
+        }
+        int in_y = line - top;
         if (affine ? in_y < 0 : top + height >= 256)
             in_y += 256;  /* the sprite wraps past line 255 */
-        sprite_line(rt, entry, in_y, layers);
+        sprite_line(rt, entry, in_y, mosaic_on ? group_w : 1, layers);
         time -= affine ? 10 + box_w * 2 : width;
         if (time <= 0)
             break;
@@ -425,15 +482,11 @@ void gba_render_line(GbaRuntime *rt, int y)
         }
     }
     for (int n = 2; n < 4; n++) {
-        int affine = (mode == 1 && n == 2) || mode == 2;
+        int affine = (mode == 1 && n == 2) || mode == 2 || (mode >= 3 && mode <= 5 && n == 2);
         if (affine && (control & (0x100u << n))) {
-            affine_line(rt, n, layers.bg[n]);
+            affine_line(rt, n, y, mode, layers.bg[n]);
             enabled |= 1u << n;
         }
-    }
-    if (mode >= 3 && mode <= 5 && (control & 0x400)) {
-        bitmap_line(rt, layers.bg[2], mode);
-        enabled |= 1u << 2;
     }
     if (control & 0x1000) {
         sprites_line(rt, y, &layers);
