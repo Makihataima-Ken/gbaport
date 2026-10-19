@@ -17,16 +17,77 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <shellapi.h>
+#pragma comment(lib, "shell32.lib")
 #endif
 
 static const char *const KEY_NAMES[10] = {
     "A", "B", "SELECT", "START", "RIGHT", "LEFT", "UP", "DOWN", "R", "L",
 };
 
+/* Paths are UTF-8. Windows hands programs their arguments in UTF-16 and opens files by
+ * UTF-16 names, so there the arguments are converted and files opened through the wide
+ * functions: any file name works, not just those of the ANSI code page. */
+#ifdef _WIN32
+static char *utf8(const wchar_t *text)
+{
+    int size = WideCharToMultiByte(CP_UTF8, 0, text, -1, NULL, 0, NULL, NULL);
+    char *out = malloc(size > 0 ? (size_t)size : 1);
+    if (out && WideCharToMultiByte(CP_UTF8, 0, text, -1, out, size, NULL, NULL) <= 0)
+        out[0] = 0;
+    return out;
+}
+
+static wchar_t *wide(const char *text)
+{
+    int size = MultiByteToWideChar(CP_UTF8, 0, text, -1, NULL, 0);
+    wchar_t *out = malloc((size > 0 ? (size_t)size : 1) * sizeof *out);
+    if (out && MultiByteToWideChar(CP_UTF8, 0, text, -1, out, size) <= 0)
+        out[0] = 0;
+    return out;
+}
+
+static FILE *open_file(const char *path, const char *mode)
+{
+    wchar_t *name = wide(path), *how = wide(mode);
+    FILE *f = name && how ? _wfopen(name, how) : NULL;
+    free(name);
+    free(how);
+    return f;
+}
+
+static void remove_file(const char *path)
+{
+    wchar_t *name = wide(path);
+    if (name)
+        _wremove(name);
+    free(name);
+}
+
+/* The command line as UTF-8 (kept until the program ends: options point into it). */
+static char **utf8_arguments(int *argc, char **argv)
+{
+    int count;
+    wchar_t **wargs = CommandLineToArgvW(GetCommandLineW(), &count);
+    char **args = wargs ? malloc((size_t)(count + 1) * sizeof *args) : NULL;
+    if (!args)
+        return argv;
+    for (int i = 0; i < count; i++)
+        args[i] = utf8(wargs[i]);
+    args[count] = NULL;
+    LocalFree(wargs);
+    *argc = count;
+    return args;
+}
+#else
+#define open_file fopen
+#define remove_file remove
+#endif
+
 /* The file's bytes, or NULL with errno set (ENOENT: there is no such file). */
 static uint8_t *read_file(const char *path, uint32_t *size)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = open_file(path, "rb");
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);
@@ -47,7 +108,12 @@ static uint8_t *read_file(const char *path, uint32_t *size)
 static int replace_file(const char *from, const char *to)
 {
 #ifdef _WIN32
-    return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) ? 0 : -1;
+    wchar_t *source = wide(from), *target = wide(to);
+    int moved = source && target &&
+                MoveFileExW(source, target, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
+    free(source);
+    free(target);
+    return moved ? 0 : -1;
 #else
     return rename(from, to);
 #endif
@@ -63,7 +129,7 @@ static void store_save(HostOptions *o, GbaRuntime *rt)
         return;
     char temp[sizeof o->save_path + 4];
     snprintf(temp, sizeof temp, "%s.new", o->save_path);
-    FILE *f = fopen(temp, "wb");
+    FILE *f = open_file(temp, "wb");
     int ok = f && fwrite(data, 1, size, f) == size;
     if (f)
         ok = fclose(f) == 0 && ok;
@@ -72,7 +138,7 @@ static void store_save(HostOptions *o, GbaRuntime *rt)
         return;
     }
     if (f)
-        remove(temp);
+        remove_file(temp);
     fprintf(stderr, "warning: cannot write the save file %s\n", o->save_path);
 }
 
@@ -119,6 +185,9 @@ static int parse_press(const char *text, HostPress *press)
 int host_parse(HostOptions *o, int argc, char **argv)
 {
     int bad = 0;
+#ifdef _WIN32
+    argv = utf8_arguments(&argc, argv);
+#endif
     o->scale = 3;
     for (int i = 1; i < argc; i++) {
         const char *arg = argv[i], *value = i + 1 < argc ? argv[i + 1] : NULL;
@@ -241,7 +310,7 @@ int host_write_bmp(const char *path, const uint32_t *pixels)
             header[fields[i][0] + b] = (uint8_t)(fields[i][1] >> (8 * b));
     header[26] = 1;   /* planes */
     header[28] = 24;  /* bits per pixel */
-    FILE *f = fopen(path, "wb");
+    FILE *f = open_file(path, "wb");
     if (!f)
         return -1;
     fwrite(header, 1, sizeof header, f);
