@@ -7,6 +7,7 @@
  * - DMA source, destination and count registers are write-only: they read as 0.
  * - Writing IE, IF or IME can make an interrupt deliverable.
  * - Writing HALTCNT halts or stops the CPU.
+ * - Writing BG2X/BG2Y/BG3X/BG3Y moves the renderer's reference points there.
  * - Timer counters are worked out from the cycle count; writes set the reload value.
  * - Starting a DMA channel latches its registers and may run it at once. */
 #include <string.h>
@@ -48,6 +49,7 @@ void gba_reset_io(GbaRuntime *rt)
     IO(rt, GBA_REG_RCNT) = 0x8000;
     IO(rt, GBA_REG_POSTFLG) = 0x0001;        /* booted */
     rt->keys_last = 0x400;
+    gba_render_frame_start(rt);
 }
 
 static int dma_channel(uint32_t offset)  /* the channel whose CNT_H is at offset, or -1 */
@@ -128,6 +130,8 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
         return;
     default:
         IO(rt, offset) = merged;
+        if ((offset >= 0x28 && offset <= 0x2E) || (offset >= 0x38 && offset <= 0x3E))
+            gba_render_reference_write(rt, offset);
         return;
     }
 }

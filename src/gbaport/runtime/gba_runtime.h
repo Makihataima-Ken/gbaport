@@ -123,6 +123,8 @@ struct GbaRuntime {
     GbaDma dma[4];
     uint16_t keys_pressed;               /* GBA key bits, 1 = pressed */
     uint16_t keys_last;                  /* at the last keypad check; 0x400: no match */
+    uint16_t screen[GBA_SCREEN_HEIGHT][GBA_SCREEN_WIDTH];  /* the picture, GBA colours */
+    int32_t affine_x[2], affine_y[2];    /* BG2's and BG3's internal reference points */
     GbaSave save;
 
     char debug_text[0x101];
@@ -199,6 +201,10 @@ int gba_save_is_eeprom(const GbaRuntime *rt, uint32_t addr);
 void gba_eeprom_dma(GbaRuntime *rt, uint32_t count);      /* a DMA of count halfwords starts */
 uint32_t gba_eeprom_read(GbaRuntime *rt);
 void gba_eeprom_write(GbaRuntime *rt, uint32_t value);
+
+void gba_render_line(GbaRuntime *rt, int y);            /* when line y's HDraw ends */
+void gba_render_frame_start(GbaRuntime *rt);            /* reference points start again */
+void gba_render_reference_write(GbaRuntime *rt, uint32_t offset);  /* BGxX/BGxY written */
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

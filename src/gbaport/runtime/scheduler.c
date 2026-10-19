@@ -68,6 +68,8 @@ void gba_scheduler_start(GbaRuntime *rt)
 static void hblank(GbaRuntime *rt)
 {
     rt->event_at[GBA_EVENT_HBLANK] = NEVER;
+    if (IO(rt, GBA_REG_VCOUNT) < GBA_VISIBLE_LINES)  /* before HBlank DMA and interrupts */
+        gba_render_line(rt, IO(rt, GBA_REG_VCOUNT));
     IO(rt, GBA_REG_DISPSTAT) |= 2;
     if (IO(rt, GBA_REG_DISPSTAT) & 0x10)
         gba_request_irq(rt, GBA_IRQ_HBLANK);
@@ -94,6 +96,7 @@ static void line_end(GbaRuntime *rt, uint64_t when)
     if (line == 0)
         gba_keypad_check(rt);  /* at the start of every frame */
     if (line == GBA_VISIBLE_LINES) {
+        gba_render_frame_start(rt);
         if (stat & 0x08)
             gba_request_irq(rt, GBA_IRQ_VBLANK);
         gba_dma_trigger(rt, 1);
