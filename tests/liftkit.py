@@ -15,6 +15,7 @@ dependence on C or V after a multiply.
 
 import functools
 import hashlib
+import os
 import random
 import struct
 import subprocess
@@ -29,6 +30,7 @@ from unicorn import UC_ARCH_ARM, UC_MODE_ARM, UC_MODE_THUMB, Uc, UcError
 from unicorn import arm_const as uc_arm
 
 import gbaport.lift
+import gbaport.native.build as native
 from gbaport.analysis.cfg import build_program
 from gbaport.analysis.discover import explore
 from gbaport.analysis.space import CodeSpace
@@ -134,24 +136,34 @@ def lift_cases(cases: list[Case]) -> str:
 
 
 def build(source: str) -> Path:
-    """Compile the harness with ``source``; reuses an earlier build of the same sources."""
+    """Compile the harness with ``source``; reuses an earlier build of the same sources.
+
+    A build Windows refuses to start (Smart App Control) is compiled again with a different
+    ``salt.c``, as ``gbaport build`` does.
+    """
     digest = hashlib.sha1()
     for text in (source, HOST.read_text(), (INCLUDE / "gba_cpu.h").read_text()):
         digest.update(text.encode())
     folder = CACHE / digest.hexdigest()[:16]
     exe = folder / "lifthost.exe"
-    if exe.exists():
+    if (folder / "started").exists():  # written once Windows let it start
         return exe
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "cases.c").write_text(source, encoding="utf-8")
+    salt = folder / "salt.c"
     command = [
-        clang(), "-std=c11", "-O1", "-Wall", "-Werror", "-Wno-unused-label",
-        f"-I{INCLUDE}", f"-I{HOST.parent}", str(HOST), str(folder / "cases.c"), "-o", str(exe),
+        clang(), "-std=c11", "-O1", "-Wall", "-Werror", "-Wno-unused-label", f"-I{INCLUDE}",
+        f"-I{HOST.parent}", str(HOST), str(folder / "cases.c"), str(salt), "-o", str(exe),
     ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(f"clang failed:\n{result.stderr[-4000:]}")
-    return exe
+    for _ in range(native.SALTED_REBUILDS + 1):
+        salt.write_text(f'const char lifthost_salt[] = "{os.urandom(8).hex()}";\n', encoding="utf-8")
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+        if result.returncode != 0:
+            raise RuntimeError(f"clang failed:\n{result.stderr[-4000:]}")
+        if native._starts(exe):
+            (folder / "started").write_text("", encoding="utf-8")
+            return exe
+    raise RuntimeError(f"Windows refused to start {exe} after {native.SALTED_REBUILDS} rebuilds")
 
 
 def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:

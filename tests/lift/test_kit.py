@@ -1,3 +1,4 @@
+import liftkit
 from liftkit import Case, differences, run_compiled, run_oracle
 
 # A hand-written stand-in for a lifted program: r0 = 5, then the stop call.
@@ -64,3 +65,20 @@ def test_differences_names_what_differs():
     a = run_oracle([case])[0]
     b = run_oracle([Case("mov r0, #6")])[0]
     assert differences(a, b) == ["r0 0x00000005 != 0x00000006"]
+
+
+def test_a_harness_windows_refuses_is_compiled_again_with_a_salt(monkeypatch, tmp_path):
+    verdicts = iter([False, True])  # Smart App Control refuses the first file, takes the next
+    builds = []
+
+    def starts(program):
+        builds.append(program.read_bytes())
+        return next(verdicts)
+
+    monkeypatch.setattr(liftkit, "CACHE", tmp_path)
+    monkeypatch.setattr(liftkit.native, "_starts", starts)
+    exe = liftkit.build(STOP_AFTER_SETTING_R0)
+    assert len(builds) == 2 and builds[0] != builds[1]
+    assert exe.read_bytes() == builds[1]
+    assert liftkit.build(STOP_AFTER_SETTING_R0) == exe  # cached once Windows took it
+    assert len(builds) == 2
