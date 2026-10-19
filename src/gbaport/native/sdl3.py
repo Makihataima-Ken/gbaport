@@ -3,7 +3,9 @@
 CMake's FetchContent downloads the pinned source release and checks its SHA-256
 (``sdl3_superbuild/CMakeLists.txt``); clang builds it as a static library, installed into
 the cache folder, so every game links the same build. The cache folder is ``$GBAPORT_CACHE`` or the user's
-cache folder (``%LOCALAPPDATA%\\gbaport`` on Windows).
+cache folder (``%LOCALAPPDATA%\\gbaport`` on Windows). The install goes to a folder of its own
+first and takes the final name only when it is complete, so a build that fails or is
+interrupted leaves nothing that looks installed.
 """
 
 import os
@@ -43,7 +45,9 @@ def sdl3_prefix(log: Callable[[str], None] = print) -> Path:
         return prefix
     log(f"building SDL3 {SDL3_VERSION} into {prefix} (once; it takes a minute or two)")
     work = cache_folder() / f"sdl3-{SDL3_VERSION}-build"
-    shutil.rmtree(work, ignore_errors=True)
+    staging = cache_folder() / f"sdl3-{SDL3_VERSION}-install"  # becomes prefix when complete
+    for folder in (work, staging):
+        shutil.rmtree(folder, ignore_errors=True)
     cmake = find_cmake()
     configure = [
         cmake, "-S", str(SUPERBUILD), "-B", str(work), "-G", "Ninja",
@@ -53,12 +57,26 @@ def sdl3_prefix(log: Callable[[str], None] = print) -> Path:
     ]
     if os.name == "nt":  # clang's GNU-style driver needs LLVM's resource compiler
         configure.append(f"-DCMAKE_RC_COMPILER={_forward(llvm_tool('llvm-rc'))}")
-    for command in (configure, [cmake, "--build", str(work)], [cmake, "--install", str(work)]):
-        result = subprocess.run(command, capture_output=True, text=True, check=False)
-        if result.returncode != 0:
-            output = (result.stdout + result.stderr)[-4000:]
-            raise ToolchainError(f"building SDL3 failed ({command[1]} {command[2]}):\n{output}")
-    shutil.rmtree(work, ignore_errors=True)
+    steps = {
+        "configure": configure,
+        "build": [cmake, "--build", str(work)],
+        "install": [cmake, "--install", str(work), "--prefix", str(staging)],
+    }
+    try:
+        for step, command in steps.items():
+            result = subprocess.run(command, capture_output=True, text=True, check=False)
+            if result.returncode != 0:
+                output = (result.stdout + result.stderr)[-4000:]
+                raise ToolchainError(
+                    f"building SDL3 failed at the {step} step. The first build downloads SDL3 "
+                    "from GitHub, so it needs a network connection, and it needs CMake and "
+                    f"Ninja; gbaport build --host headless needs none of them.\n{output}"
+                )
+        shutil.rmtree(prefix, ignore_errors=True)  # what an interrupted older build left
+        staging.replace(prefix)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        shutil.rmtree(staging, ignore_errors=True)
     return prefix
 
 
