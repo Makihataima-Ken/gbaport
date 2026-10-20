@@ -139,10 +139,19 @@ typedef struct {
 } GbaWave;
 
 typedef struct {
+    GbaEnvelope env;
+    int ratio, narrow, shift;     /* SOUND4CNT_H: divider, 7-bit register, shift */
+    int length, stop;
+    int lfsr, sample, playing;
+    int64_t last_event;           /* the time the register last stepped up to */
+} GbaNoise;
+
+typedef struct {
     int enable;                   /* SOUNDCNT_X bit 7 */
     int frame;                    /* the frame sequencer's last step, 0-7 */
     GbaSquare square[2];
     GbaWave wave;
+    GbaNoise noise;
     int volume_left, volume_right;  /* SOUNDCNT_L: 0-7 */
     uint8_t sides;                  /* SOUNDCNT_L's high byte: bits 0-3 right, 4-7 left */
 } GbaPsg;

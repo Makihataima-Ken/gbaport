@@ -4,7 +4,9 @@
  * (the duty), each step 16 (2048 - frequency) cycles long. Channel 3 plays the 4-bit
  * samples in wave RAM: one bank of 32 (SOUND3CNT_L bit 6 chooses which; the game writes
  * the other) or both, 64, one every 8 (2048 - rate) cycles, at 0%, 25%, 50%, 75% or 100%.
- * Every channel's level is 0-15 (squares: the
+ * Channel 4 plays noise: a 15-bit (or 7-bit) shift register steps every 32 r << s cycles
+ * (r = 2 x the divider, or 1 for divider 0; s the shift), and the bit it shifts out sets
+ * the level to the envelope's volume or 0. Every channel's level is 0-15 (squares: the
  * envelope's volume when the wave is high). The frame sequencer steps every 32768 cycles
  * from the game's start (512 times a second); its steps 0, 2, 4 and 6 count lengths down
  * (a channel with "stop" set ends when its length runs out), steps 2 and 6 move channel
@@ -37,6 +39,7 @@ void gba_psg_reset(GbaPsg *p)
     p->square[0].sweep_time = 8;
     for (int i = 0; i < 2; i++)
         p->square[i].env.dead = 2;
+    p->noise.env.dead = 2;
 }
 
 /* ---- envelopes and lengths ---- */
@@ -217,6 +220,40 @@ static void wave_control(GbaPsg *p, int64_t t, uint8_t value)
         w->next_update = t + 24 + 8 * (2048 - w->rate);
 }
 
+/* ---- the noise channel ---- */
+
+static void noise_run(GbaNoise *n, int64_t t)
+{
+    if (!n->playing)
+        return;
+    int64_t cycles = (int64_t)(n->ratio ? 2 * n->ratio : 1) << n->shift;
+    cycles *= 32;
+    int64_t diff = t - n->last_event, done = 0;
+    if (diff < cycles)
+        return;
+    int bit = 0;
+    for (; done + cycles <= diff; done += cycles) {
+        bit = n->lfsr & 1;
+        n->lfsr >>= 1;
+        n->lfsr ^= bit * (n->narrow ? 0x60 : 0x6000);
+    }
+    n->sample = bit * n->env.volume;
+    n->last_event += done;
+}
+
+/* NR44: stop, restart. */
+static void noise_control(GbaPsg *p, int64_t t, uint8_t value)
+{
+    GbaNoise *n = &p->noise;
+    length_control(&n->length, &n->stop, &n->playing, value, 64, p->frame);
+    if (value & 0x80) {
+        n->playing = envelope_restart(&n->env);
+        n->lfsr = n->narrow ? 0x7F : 0x7FFF;
+        if (n->playing)
+            n->last_event = t;
+    }
+}
+
 /* ---- the PSG ---- */
 
 void gba_psg_run(GbaPsg *p, int64_t t, int channels)
@@ -228,6 +265,8 @@ void gba_psg_run(GbaPsg *p, int64_t t, int channels)
             square_run(&p->square[n], t, channels == 1 << n);
     if (channels & 4)
         wave_run(&p->wave, t);
+    if (channels & 8)
+        noise_run(&p->noise, t);
 }
 
 void gba_psg_tick(GbaPsg *p, int64_t t)
@@ -237,6 +276,7 @@ void gba_psg_tick(GbaPsg *p, int64_t t)
     gba_psg_run(p, t, 0x7);
     p->frame = (p->frame + 1) & 7;
     GbaSquare *s1 = &p->square[0];
+    GbaNoise *noise = &p->noise;
     switch (p->frame) {
     case 2:
     case 6:
@@ -252,6 +292,8 @@ void gba_psg_tick(GbaPsg *p, int64_t t)
         }
         if (p->wave.length && p->wave.stop && --p->wave.length == 0)
             p->wave.playing = 0;
+        if (noise->length && noise->stop && --noise->length == 0)
+            noise->playing = 0;
         break;
     case 7:
         for (int n = 0; n < 2; n++) {
@@ -260,6 +302,11 @@ void gba_psg_tick(GbaPsg *p, int64_t t)
                 envelope_step(&s->env);
                 square_level(s);
             }
+        }
+        if (noise->playing && !noise->env.dead && --noise->env.next_step == 0) {
+            int on = noise->sample > 0;
+            envelope_step(&noise->env);
+            noise->sample = on * noise->env.volume;
         }
         break;
     default:
@@ -273,6 +320,7 @@ static void write_byte(GbaPsg *p, int64_t t, uint32_t offset, uint8_t value)
 {
     GbaSquare *s1 = &p->square[0];
     GbaWave *w = &p->wave;
+    GbaNoise *n = &p->noise;
     switch (offset) {
     case 0x060: {  /* NR10: sweep */
         gba_psg_run(p, t, 1);
@@ -339,6 +387,25 @@ static void write_byte(GbaPsg *p, int64_t t, uint32_t offset, uint8_t value)
         gba_psg_run(p, t, 4);
         wave_control(p, t, value);
         break;
+    case 0x078:  /* NR41: length */
+        gba_psg_run(p, t, 8);
+        n->length = 64 - (value & 0x3F);
+        break;
+    case 0x079:  /* NR42: envelope */
+        gba_psg_run(p, t, 8);
+        if (!envelope_write(&n->env, value))
+            n->playing = 0;
+        break;
+    case 0x07C:  /* NR43: divider, width, shift */
+        gba_psg_run(p, t, 8);
+        n->ratio = value & 7;
+        n->narrow = (value >> 3) & 1;
+        n->shift = value >> 4;
+        break;
+    case 0x07D:  /* NR44 */
+        gba_psg_run(p, t, 8);
+        noise_control(p, t, value);
+        break;
     case 0x080:  /* NR50: volumes */
         gba_psg_run(p, t, 0xF);
         p->volume_right = value & 7;
@@ -362,6 +429,8 @@ static uint16_t readable(uint32_t offset)
     case 0x064: case 0x06C: case 0x074: return 0x4000;
     case 0x070: return 0x00E0;
     case 0x072: return 0xE000;
+    case 0x078: return 0xFF00;
+    case 0x07C: return 0x40FF;
     case 0x080: return 0xFF77;
     default: return 0;
     }
@@ -382,6 +451,7 @@ void gba_psg_enable(GbaPsg *p, int64_t t, int on)
         for (int n = 0; n < 2; n++)
             p->square[n].playing = 0;
         p->wave.playing = 0;
+        p->noise.playing = 0;
         p->enable = 0;
         for (uint32_t r = 0x060; r <= 0x080; r += 2)
             gba_psg_write(p, t, r, 0, 0xFFFF);
@@ -394,7 +464,8 @@ void gba_psg_enable(GbaPsg *p, int64_t t, int on)
 
 int gba_psg_status(const GbaPsg *p)
 {
-    return p->square[0].playing | p->square[1].playing << 1 | p->wave.playing << 2;
+    return p->square[0].playing | p->square[1].playing << 1 | p->wave.playing << 2 |
+           p->noise.playing << 3;
 }
 
 /* Wave RAM word `index` (0-3) of the bank the wave channel is not playing (bank 1 while the
@@ -415,9 +486,9 @@ uint32_t gba_psg_wave_read(GbaPsg *p, int64_t t, int index)
 
 void gba_psg_mix(const GbaPsg *p, int *left, int *right)
 {
-    int levels[3] = {p->square[0].sample, p->square[1].sample, p->wave.sample};
+    int levels[4] = {p->square[0].sample, p->square[1].sample, p->wave.sample, p->noise.sample};
     int l = 0, r = 0;
-    for (int n = 0; n < 3; n++) {
+    for (int n = 0; n < 4; n++) {
         if (p->sides & (0x10 << n))
             l += levels[n];
         if (p->sides & (0x01 << n))
