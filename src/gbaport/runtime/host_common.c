@@ -1,7 +1,8 @@
 /* host_common.c - the parts of a host that do not depend on a window.
  *
  * The save chip's contents live in a file (default: the ROM's path with .sav): loaded at
- * the start, stored once a second while they change and again at the end. Scripted key
+ * the start, stored once a second while they change and again at the end. With --audio
+ * PATH the sound goes to a WAV file too (16-bit stereo, 32768 samples a second). Scripted key
  * presses (--press FRAME:KEYS) let tests and recordings drive the game: KEYS are names
  * joined with '+' (A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L) or "none", held from
  * the FRAME-th VBlank on. While the game is stopped, time does not pass, so the next
@@ -142,6 +143,31 @@ static void store_save(HostOptions *o, GbaRuntime *rt)
     fprintf(stderr, "warning: cannot write the save file %s\n", o->save_path);
 }
 
+/* A WAV file's 44-byte header for `samples` 16-bit stereo samples. */
+static void wav_header(uint8_t *header, uint32_t samples)
+{
+    uint32_t data = samples * 4;
+    uint32_t fields[][2] = {  /* offset, little-endian 32-bit value */
+        {4, 36 + data}, {16, 16}, {20, 1 | 2u << 16}, {24, GBA_SOUND_RATE},
+        {28, GBA_SOUND_RATE * 4}, {32, 4 | 16u << 16}, {40, data},
+    };
+    memcpy(header, "RIFF....WAVEfmt ....................data....", 44);
+    for (size_t i = 0; i < sizeof fields / sizeof fields[0]; i++)
+        for (int b = 0; b < 4; b++)
+            header[fields[i][0] + b] = (uint8_t)(fields[i][1] >> (8 * b));
+}
+
+static void write_sound(HostOptions *o)
+{
+    FILE *f = o->audio_file;
+    for (uint32_t i = 0; f && i < o->sound_count; i++) {
+        uint8_t bytes[4] = {(uint8_t)o->sound[i][0], (uint8_t)(o->sound[i][0] >> 8),
+                            (uint8_t)o->sound[i][1], (uint8_t)(o->sound[i][1] >> 8)};
+        fwrite(bytes, 1, sizeof bytes, f);
+    }
+    o->audio_samples += o->sound_count;
+}
+
 static void default_save_path(HostOptions *o)
 {
     char *path = o->save_path;
@@ -208,6 +234,9 @@ int host_parse(HostOptions *o, int argc, char **argv)
         } else if (strcmp(arg, "--screenshot") == 0 && value) {
             o->screenshot = value;
             i++;
+        } else if (strcmp(arg, "--audio") == 0 && value) {
+            o->audio = value;
+            i++;
         } else if (strcmp(arg, "--registers") == 0) {
             o->registers = 1;
         } else if (o->window && strcmp(arg, "--scale") == 0 && value) {
@@ -225,7 +254,7 @@ int host_parse(HostOptions *o, int argc, char **argv)
     if (!o->rom_path || bad) {
         fprintf(stderr,
                 "usage: %s ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... "
-                "[--registers] [--screenshot PATH]%s\n",
+                "[--registers] [--screenshot PATH] [--audio PATH]%s\n",
                 argv[0], o->window ? " [--scale N] [--fast]" : "");
         return 2;
     }
@@ -257,6 +286,16 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
         return 2;
     }
     free(save);
+    if (o->audio) {
+        uint8_t header[44];
+        wav_header(header, 0);
+        FILE *f = open_file(o->audio, "wb");
+        if (!f || fwrite(header, 1, sizeof header, f) != sizeof header) {
+            fprintf(stderr, "error: cannot write %s\n", o->audio);
+            return 2;
+        }
+        o->audio_file = f;
+    }
     while (o->next_press < o->press_count && o->presses[o->next_press].frame == 0)
         o->script_keys = o->presses[o->next_press++].keys;
     gba_set_keys(rt, o->script_keys);
@@ -265,6 +304,8 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
 
 void host_frame(HostOptions *o, GbaRuntime *rt)
 {
+    o->sound_count = gba_audio_take(rt, o->sound, GBA_SOUND_BUFFER);
+    write_sound(o);
     while (o->next_press < o->press_count && o->presses[o->next_press].frame <= rt->frames)
         o->script_keys = o->presses[o->next_press++].keys;
     if (rt->frames % 60 == 0)
@@ -284,6 +325,17 @@ int host_script_wake(HostOptions *o)
 int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
 {
     store_save(o, rt);
+    FILE *f = o->audio_file;
+    if (f) {
+        o->sound_count = gba_audio_take(rt, o->sound, GBA_SOUND_BUFFER);
+        write_sound(o);
+        uint8_t header[44];
+        wav_header(header, o->audio_samples);
+        if (fseek(f, 0, SEEK_SET) != 0 || fwrite(header, 1, sizeof header, f) != sizeof header ||
+            fclose(f) != 0)
+            fprintf(stderr, "warning: cannot finish the sound file %s\n", o->audio);
+        o->audio_file = NULL;
+    }
     if (o->registers) {
         GbaCtx *ctx = &rt->cpu;
         fprintf(stderr, "registers");

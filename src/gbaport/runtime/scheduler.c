@@ -58,9 +58,9 @@ void gba_scheduler_start(GbaRuntime *rt)
 {
     for (int i = 0; i < GBA_EVENT_COUNT; i++)
         rt->event_at[i] = NEVER;
-    rt->line_start = rt->cpu.cycles;
+    rt->line_start = rt->cpu.cycles + GBA_START_HBLANK - GBA_CYCLES_HDRAW;
     rt->frames = 0;
-    IO(rt, GBA_REG_VCOUNT) = 0;
+    IO(rt, GBA_REG_VCOUNT) = GBA_START_LINE;
     schedule_line(rt);
     gba_reschedule(rt);
 }
@@ -100,6 +100,7 @@ static void line_end(GbaRuntime *rt, uint64_t when)
         if (stat & 0x08)
             gba_request_irq(rt, GBA_IRQ_VBLANK);
         gba_dma_trigger(rt, 1);
+        gba_audio_run(rt, when);
         rt->frames++;
         if (rt->host.frame)
             rt->host.frame(rt, rt->host.user);

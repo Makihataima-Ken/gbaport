@@ -59,9 +59,10 @@ static void power_on(GbaRuntime *rt)
     memset(rt->palette, 0, sizeof rt->palette);
     memset(rt->vram, 0, sizeof rt->vram);
     memset(rt->oam, 0, sizeof rt->oam);
-    rt->cpu.cycles = 0;
+    rt->cpu.cycles = GBA_CYCLES_HDRAW - GBA_START_HBLANK;  /* the start line began at 0 */
     reset_cpu(rt);
     gba_reset_io(rt);
+    gba_audio_reset(rt);
     rt->bios_bus = 0xE129F000u;  /* the opcode the BIOS fetches last before starting the game */
     gba_scheduler_start(rt);
 }

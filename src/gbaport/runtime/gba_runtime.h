@@ -27,6 +27,13 @@ enum {
     GBA_LINES = 228,
     GBA_VISIBLE_LINES = 160,
     GBA_CYCLES_FRAME = GBA_CYCLES_LINE * GBA_LINES,
+    /* The game starts where mGBA's BIOS replacement starts it: in line 126, 117 cycles
+     * before that line's HBlank. Its clock (and so its sound) counts from there. */
+    GBA_START_LINE = 126,
+    GBA_START_HBLANK = 117,
+    GBA_SOUND_RATE = 32768,     /* samples a second */
+    GBA_CYCLES_SAMPLE = 512,
+    GBA_SOUND_BUFFER = 8192,    /* samples kept for the host (the oldest go when it is full) */
 };
 
 enum {  /* interrupt request bits (IE, IF) */
@@ -102,6 +109,13 @@ typedef struct {
 
 enum { GBA_EVENT_HBLANK, GBA_EVENT_LINE, GBA_EVENT_TIMER0, GBA_EVENT_COUNT = GBA_EVENT_TIMER0 + 4 };
 
+typedef struct {
+    uint64_t start;  /* cycle sample 0 begins: the game's start */
+    uint64_t next;   /* the sample made next; sample k covers start + 512 k .. 512 (k + 1) */
+    int16_t buffer[GBA_SOUND_BUFFER][2];  /* left, right; a ring */
+    uint32_t first, count;
+} GbaAudio;
+
 struct GbaRuntime {
     GbaCtx cpu;
     GbaHost host;
@@ -125,6 +139,7 @@ struct GbaRuntime {
     uint16_t keys_last;                  /* at the last keypad check; 0x400: no match */
     uint16_t screen[GBA_SCREEN_HEIGHT][GBA_SCREEN_WIDTH];  /* the picture, GBA colours */
     int32_t affine_x[2], affine_y[2];    /* BG2's and BG3's internal reference points */
+    GbaAudio audio;
     GbaSave save;
 
     char debug_text[0x101];
@@ -150,6 +165,9 @@ GbaEnd gba_run(GbaRuntime *rt);
 void gba_end(GbaRuntime *rt, GbaEnd why);  /* from a callback: ends gba_run */
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed);  /* GBA key bits, 1 = pressed */
 void gba_screen(const GbaRuntime *rt, uint32_t *pixels);  /* 240x160, 0x00RRGGBB */
+/* Moves up to `max` samples made so far (left, right pairs, 32768 a second) to `out`,
+ * oldest first; returns how many. */
+uint32_t gba_audio_take(GbaRuntime *rt, int16_t (*out)[2], uint32_t max);
 uint32_t gba_crc32(const uint8_t *data, uint32_t size);
 uint8_t *gba_save_data(GbaRuntime *rt, uint32_t *size);  /* size 0: nothing to store */
 int gba_save_dirty(const GbaRuntime *rt);
@@ -205,6 +223,9 @@ void gba_eeprom_write(GbaRuntime *rt, uint32_t value);
 void gba_render_line(GbaRuntime *rt, int y);            /* when line y's HDraw ends */
 void gba_render_frame_start(GbaRuntime *rt);            /* reference points start again */
 void gba_render_reference_write(GbaRuntime *rt, uint32_t offset);  /* BGxX/BGxY written */
+
+void gba_audio_reset(GbaRuntime *rt);
+void gba_audio_run(GbaRuntime *rt, uint64_t now);  /* makes the samples that end by now */
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

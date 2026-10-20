@@ -1,11 +1,12 @@
 /* host_headless.c - run a recompiled game without a window.
  *
  *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--registers]
- *              [--screenshot PATH]
+ *              [--screenshot PATH] [--audio PATH]
  *
  * The game's mGBA debug-log lines go to stdout, runtime warnings and errors to stderr.
  * Keys come only from --press (host_common.c). --registers prints the CPU registers when
- * the run ends; --screenshot writes the last picture as a BMP file.
+ * the run ends; --screenshot writes the last picture as a BMP file; --audio writes the
+ * sound as a WAV file.
  * Exit status: 0 the game executed Stop and no scripted press was left to wake it, 2 bad
  * arguments, the wrong ROM or an unusable save file, 3 a runtime error (for example code
  * the recompiler did not find), 4 the frame limit was reached. */

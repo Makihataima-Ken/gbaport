@@ -1,9 +1,9 @@
-"""mGBA as the reference picture for the renderer tests.
+"""mGBA as the reference picture and sound for the renderer and sound tests.
 
 mGBA's GBA core is the spec's development-time oracle (MPL-2.0; nothing ships it). The
 pinned source release is downloaded once (its SHA-256 checked) and built with CMake, Ninja
 and clang, together with ``mgbaref/mgbaref.c``, which runs a ROM for some frames and
-writes its picture. Both live in gbaport's cache folder (``$GBAPORT_CACHE``, by default the
+writes its picture and the samples it mixed. Both live in gbaport's cache folder (``$GBAPORT_CACHE``, by default the
 user's), next to SDL3; a change to ``mgbaref/`` builds it again. A harness Windows refuses
 to start is linked again with a new ``salt.c``, like every program the tests build.
 """
@@ -81,14 +81,29 @@ def mgbaref_program() -> Path:
     raise ToolchainError(f"Windows refused to start {program} after {native.SALTED_REBUILDS} rebuilds")
 
 
-def mgba_picture(rom: bytes, frames: int) -> list[int]:
-    """mGBA's picture after ``frames`` frames: 240x160 GBA colours (0BBBBBGGGGGRRRRR),
-    top row first."""
+def _reference(rom: bytes, frames: int, sound: bool) -> tuple[bytes, bytes]:
+    """mgbaref's picture and (with ``sound``) sound files after ``frames`` frames."""
     program = mgbaref_program()
     with tempfile.TemporaryDirectory() as scratch:
         rom_path, out = Path(scratch) / "game.gba", Path(scratch) / "picture.raw"
+        sound_path = Path(scratch) / "sound.raw"
         rom_path.write_bytes(rom)
-        result = subprocess.run([str(program), str(rom_path), str(frames), str(out)],
+        command = [str(program), str(rom_path), str(frames), str(out)]
+        result = subprocess.run(command + ([str(sound_path)] if sound else []),
                                 capture_output=True, text=True, timeout=120, check=False)
         assert result.returncode == 0, f"mgbaref: {result.stderr}"
-        return list(struct.unpack("<38400H", out.read_bytes()))
+        return out.read_bytes(), sound_path.read_bytes() if sound else b""
+
+
+def mgba_picture(rom: bytes, frames: int) -> list[int]:
+    """mGBA's picture after ``frames`` frames: 240x160 GBA colours (0BBBBBGGGGGRRRRR),
+    top row first."""
+    return list(struct.unpack("<38400H", _reference(rom, frames, sound=False)[0]))
+
+
+def mgba_sound(rom: bytes, frames: int) -> list[tuple[int, int]]:
+    """The samples mGBA mixes in ``frames`` frames, 32768 a second: (left, right) pairs of
+    signed 16-bit values, before mGBA resamples them for playback."""
+    data = _reference(rom, frames, sound=True)[1][8:]  # mGBA's first 2 come before any
+    values = struct.unpack(f"<{len(data) // 2}h", data)      # sound: its mixer starts late
+    return list(zip(values[0::2], values[1::2], strict=True))

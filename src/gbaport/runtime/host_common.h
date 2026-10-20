@@ -1,5 +1,5 @@
 /* host_common.h - what both hosts do the same way: the command line, the ROM and save
- * files, scripted key presses, the frame limit and the end of a run. */
+ * files, scripted key presses, the frame limit, the sound file and the end of a run. */
 #ifndef HOST_COMMON_H
 #define HOST_COMMON_H
 
@@ -18,6 +18,11 @@ typedef struct {
     unsigned long frame_limit;  /* 0: no limit */
     int registers;              /* print the CPU registers when the run ends */
     const char *screenshot;     /* write the last picture there (BMP) */
+    const char *audio;          /* write the sound there (WAV) */
+    void *audio_file;           /* the open WAV file (a FILE *) */
+    uint32_t audio_samples;     /* written to it so far */
+    int16_t sound[GBA_SOUND_BUFFER][2];  /* the samples of the last frame */
+    uint32_t sound_count;
     int window;                 /* the window host's options are allowed */
     int fast;                   /* window: no frame pacing */
     int scale;                  /* window: initial size in GBA screens */
@@ -31,11 +36,12 @@ typedef struct {
 int host_parse(HostOptions *o, int argc, char **argv);
 /* Loads the ROM and the save file into rt; returns 0, or 2 after printing why not. */
 int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host);
-/* Once a frame: scripted presses due by now, the save file, the frame limit. */
+/* Once a frame: the frame's samples (o->sound) and the sound file, scripted presses due
+ * by now, the save file, the frame limit. */
 void host_frame(HostOptions *o, GbaRuntime *rt);
 /* While the game is stopped: applies the next scripted press; 0 when none is left. */
 int host_script_wake(HostOptions *o);
-/* Stores the save, reports the end and returns the exit status. */
+/* Stores the save, finishes the sound file, reports the end and returns the exit status. */
 int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end);
 /* Writes 240x160 pixels (0x00RRGGBB) as a BMP file; returns 0 on success. */
 int host_write_bmp(const char *path, const uint32_t *pixels);
