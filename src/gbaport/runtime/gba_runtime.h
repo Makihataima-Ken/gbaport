@@ -33,6 +33,7 @@ enum {
     GBA_START_HBLANK = 117,
     GBA_SOUND_RATE = 32768,     /* samples a second */
     GBA_CYCLES_SAMPLE = 512,
+    GBA_CYCLES_TICK = 32768,    /* the PSG's frame sequencer: 512 steps a second */
     GBA_SOUND_BUFFER = 8192,    /* samples kept for the host (the oldest go when it is full) */
 };
 
@@ -112,6 +113,30 @@ typedef struct {
 enum { GBA_EVENT_HBLANK, GBA_EVENT_LINE, GBA_EVENT_TIMER0, GBA_EVENT_COUNT = GBA_EVENT_TIMER0 + 4 };
 
 typedef struct {
+    int step_time, up, initial;  /* NRx2 */
+    int volume, next_step;
+    int dead;                    /* 0: moving; 1: stopped at 15; 2: stopped at 0 */
+    int duty;                    /* NRx1, squares */
+} GbaEnvelope;
+
+typedef struct {
+    GbaEnvelope env;
+    int frequency, length, stop;  /* stop: end when the length runs out */
+    int index, sample, playing;   /* the wave's step (0-7) and level (0-15) */
+    int64_t last_update;          /* the time the step was last brought up to */
+    int sweep_shift, sweep_down, sweep_time, sweep_step, sweep_on, swept;  /* channel 1 */
+    int real_frequency;
+} GbaSquare;
+
+typedef struct {
+    int enable;                   /* SOUNDCNT_X bit 7 */
+    int frame;                    /* the frame sequencer's last step, 0-7 */
+    GbaSquare square[2];
+    int volume_left, volume_right;  /* SOUNDCNT_L: 0-7 */
+    uint8_t sides;                  /* SOUNDCNT_L's high byte: bits 0-3 right, 4-7 left */
+} GbaPsg;
+
+typedef struct {
     uint32_t data[8];         /* words waiting; read == write: empty (as in mGBA) */
     uint32_t read, write;
     int32_t word;             /* the word playing, shifted down a byte per sample */
@@ -124,8 +149,10 @@ typedef struct {
     uint64_t next;   /* the sample made next; sample k covers start + 512 k .. 512 (k + 1) */
     int16_t buffer[GBA_SOUND_BUFFER][2];  /* left, right; a ring */
     uint32_t first, count;
+    uint64_t tick;   /* the frame sequencer step made next; step k comes at start + 32768 k */
     int enable;      /* SOUNDCNT_X bit 7: the sound hardware is on */
     GbaFifo fifo[2]; /* A and B */
+    GbaPsg psg;
 } GbaAudio;
 
 struct GbaRuntime {
@@ -241,9 +268,20 @@ void gba_audio_run(GbaRuntime *rt, uint64_t now);  /* makes the samples that end
 /* A write to a sound register (0x060-0x0AE) of the bytes in `mask`; returns what the
  * register holds after it. */
 uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask);
+uint16_t gba_audio_read(GbaRuntime *rt, uint32_t offset);  /* SOUNDCNT_X's status bits */
 void gba_audio_fifo_write(GbaRuntime *rt, int fifo, uint32_t value);  /* a 32-bit write */
 void gba_audio_timer(GbaRuntime *rt, int n, uint64_t when);  /* timer n overflowed */
 void gba_audio_clear(GbaRuntime *rt);  /* RegisterRamReset's sound part */
+
+/* psg.c; times count cycles from the game's start. */
+void gba_psg_reset(GbaPsg *p);
+void gba_psg_run(GbaPsg *p, int64_t t, int channels);  /* bring channels (bits) up to t */
+void gba_psg_tick(GbaPsg *p, int64_t t);                /* a frame sequencer step */
+/* The bytes in `mask` of PSG register `offset` (0x060-0x080); returns its readable bits. */
+uint16_t gba_psg_write(GbaPsg *p, int64_t t, uint32_t offset, uint16_t value, uint16_t mask);
+void gba_psg_enable(GbaPsg *p, int64_t t, int on);
+int gba_psg_status(const GbaPsg *p);                  /* bit n: channel n + 1 plays */
+void gba_psg_mix(const GbaPsg *p, int *left, int *right);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */

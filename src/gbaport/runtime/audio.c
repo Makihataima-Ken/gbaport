@@ -13,7 +13,12 @@
  * SOUNDCNT_H chooses for a FIFO overflows, the FIFO plays its next byte; when 3 words or
  * fewer are left, the DMA channel (1 or 2) that writes to it in special timing copies 4
  * more. The byte plays at 50% or 100% (SOUNDCNT_H bits 2 and 3), on the left and right as
- * SOUNDCNT_H says. A FIFO that runs dry keeps playing what is left of its last word. */
+ * SOUNDCNT_H says. A FIFO that runs dry keeps playing what is left of its last word.
+ *
+ * The PSG's four channels (psg.c) are added before the FIFOs, at 25%, 50% or 100% as
+ * SOUNDCNT_H's bits 0-1 say. Its frame sequencer steps every 32768 cycles; a sample that
+ * ends when a step comes is made before the step. While the sound hardware is off
+ * (SOUNDCNT_X bit 7), the PSG's registers ignore writes. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -25,6 +30,7 @@ void gba_audio_reset(GbaRuntime *rt)
     GbaAudio *a = &rt->audio;
     memset(a, 0, sizeof *a);
     a->start = rt->cpu.cycles;
+    gba_psg_reset(&a->psg);
 }
 
 /* What a channel sum sounds like through SOUNDBIAS. */
@@ -51,7 +57,10 @@ static void mix(GbaRuntime *rt)
 {
     GbaAudio *a = &rt->audio;
     uint16_t control = IO(rt, GBA_REG_SOUNDCNT_H);
-    int left = 0, right = 0;
+    int left, right;
+    gba_psg_mix(&a->psg, &left, &right);
+    left >>= 4 - (control & 3);
+    right >>= 4 - (control & 3);
     for (int i = 0; i < 2; i++) {
         int value = (a->fifo[i].sample * 4) >> !(control & (4 << i));
         if (control & (0x200 << 4 * i))
@@ -66,9 +75,19 @@ static void mix(GbaRuntime *rt)
 void gba_audio_run(GbaRuntime *rt, uint64_t now)
 {
     GbaAudio *a = &rt->audio;
-    while (a->start + (a->next + 1) * GBA_CYCLES_SAMPLE <= now) {
-        mix(rt);
-        a->next++;
+    for (;;) {
+        uint64_t end = a->start + (a->next + 1) * GBA_CYCLES_SAMPLE;
+        uint64_t tick = a->start + a->tick * GBA_CYCLES_TICK;
+        if (end <= tick && end <= now) {
+            gba_psg_run(&a->psg, (int64_t)(a->next * GBA_CYCLES_SAMPLE), 0xF);
+            mix(rt);
+            a->next++;
+        } else if (tick <= now) {
+            gba_psg_tick(&a->psg, (int64_t)(tick - a->start));
+            a->tick++;
+        } else {
+            return;
+        }
     }
 }
 
@@ -137,6 +156,13 @@ uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16
     GbaAudio *a = &rt->audio;
     uint16_t old = IO(rt, offset);
     gba_audio_run(rt, rt->cpu.cycles);
+    int64_t t = (int64_t)(rt->cpu.cycles - a->start);
+    if (offset >= GBA_REG_SOUND_FIRST && offset <= GBA_REG_SOUNDCNT_L) {
+        if (!a->enable)
+            return old;
+        uint16_t bits = gba_psg_write(&a->psg, t, offset, value, mask) & mask;
+        return (uint16_t)((old & ~mask) | (value & bits));
+    }
     value = (uint16_t)((old & ~mask) | (value & mask));
     switch (offset) {
     case GBA_REG_SOUNDCNT_H:
@@ -146,12 +172,13 @@ uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16
         return value & 0x770F;
     case GBA_REG_SOUNDCNT_X:
         a->enable = (value >> 7) & 1;
+        gba_psg_enable(&a->psg, t, a->enable);
         if (!a->enable) {  /* the sound hardware off: its registers clear */
             for (uint32_t r = GBA_REG_SOUND_FIRST; r < GBA_REG_SOUNDCNT_H; r += 2)
                 IO(rt, r) = 0;
             IO(rt, GBA_REG_SOUNDCNT_H) &= 0xFF00;
         }
-        return value & 0x0080;
+        return (uint16_t)((value & 0x0080) | gba_psg_status(&a->psg));
     case GBA_REG_SOUNDBIAS:
         return value & 0xC3FE;
     case GBA_REG_FIFO_A:
@@ -167,6 +194,14 @@ uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16
     default:
         return value;
     }
+}
+
+uint16_t gba_audio_read(GbaRuntime *rt, uint32_t offset)
+{
+    gba_audio_run(rt, rt->cpu.cycles);
+    if (offset == GBA_REG_SOUNDCNT_X)
+        return (uint16_t)((IO(rt, offset) & 0x0080) | gba_psg_status(&rt->audio.psg));
+    return IO(rt, offset);
 }
 
 void gba_audio_clear(GbaRuntime *rt)

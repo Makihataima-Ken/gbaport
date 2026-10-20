@@ -45,6 +45,7 @@ int main(void)
 
     REG_IE = IRQ_VBLANK;
     REG_DISPCNT = 0x0403;
+    REG16(0x04000084) = 0x0080;  /* SOUNDCNT_X: sound on, or SOUNDCNT_L ignores writes */
     REG16(0x04000080) = 0x1234;  /* SOUNDCNT_L */
     ram_reset(0x80);
     expect("register reset: forced blank", REG_DISPCNT, 0x0080);
