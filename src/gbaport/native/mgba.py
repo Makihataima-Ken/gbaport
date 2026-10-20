@@ -26,8 +26,8 @@ SOURCE = Path(__file__).parent / "mgba_oracle"
 SOURCE_FILES = ("CMakeLists.txt", "mgba.c")
 
 
-class MgbaError(RuntimeError):
-    """mGBA could not run the ROM as asked."""
+class MgbaError(OSError):
+    """mGBA could not run the ROM as asked (the command line reports it as an error)."""
 
 
 def _source_release() -> Path:

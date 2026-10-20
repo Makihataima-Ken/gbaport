@@ -10,6 +10,7 @@ from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issue
 from gbaport.analysis.config import GameConfig, default_config_path, load_config
 from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save_trace
 from gbaport.disasm import disassemble, format_line
+from gbaport.inputs import load_input
 from gbaport.isa.model import Mode
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.build import HOSTS, compile_native, generated_sources, write_sources
@@ -18,6 +19,7 @@ from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
 from gbaport.tracing.gdb import GdbClient, GdbError, SocketTransport
 from gbaport.tracing.session import TraceSession, check_loaded_rom
+from gbaport.verify import verify
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_trace_command(commands)
     _add_recompile_command(commands)
     _add_build_command(commands)
+    _add_verify_command(commands)
     return parser
 
 
@@ -266,6 +269,51 @@ def _run_build(args: argparse.Namespace) -> int:
     print(f"built {program}")
     print(f"run it with: {program} {args.rom} [--save PATH] [--frames N]")
     return 0
+
+
+def _add_verify_command(commands) -> None:
+    verify_command = commands.add_parser(
+        "verify", help="play a game natively and in mGBA, and compare their pictures"
+    )
+    verify_command.add_argument("rom", help="path to a .gba file")
+    verify_command.add_argument(
+        "--frames", type=int, default=600, help="frames to play (default 600: ten seconds)"
+    )
+    verify_command.add_argument(
+        "--input", help="input file both play (see gbaport/inputs.py; default: no keys)"
+    )
+    verify_command.add_argument(
+        "--slack",
+        type=int,
+        default=1,
+        help="frames a picture may come early or late (default 1)",
+    )
+    verify_command.add_argument(
+        "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
+    )
+    verify_command.add_argument(
+        "--trace",
+        action="append",
+        default=[],
+        help="trace file to import (repeatable; games/<game_code>/traces/*.trace are read too)",
+    )
+    verify_command.add_argument(
+        "--out",
+        help="folder for the build, the hashes and pictures (default: build/<game_code>-verify)",
+    )
+    verify_command.set_defaults(handler=_run_verify)
+
+
+def _run_verify(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    if args.input:
+        load_input(args.input)  # a bad input file stops here, with its line
+    game_code = parse_header(rom).game_code or "game"
+    root = Path(args.out) if args.out else Path("build") / f"{game_code}-verify"
+    _recompile(args, rom, root / "generated")
+    program = compile_native(root / "generated", root / "build", f"{game_code}-verify", "headless")
+    return verify(program, Path(args.rom), args.frames, Path(args.input) if args.input else None,
+                  root, args.slack)
 
 
 def main(argv: list[str] | None = None) -> int:
