@@ -186,6 +186,8 @@ void gba_write32(GbaCtx *ctx, uint32_t addr, uint32_t value)
         put32(mem + offset, value);
     } else if (is_save(addr)) {
         gba_save_write8(rt, addr, value >> (addr & 3) * 8);
+    } else if ((addr & ~7u) == 0x040000A0u) {  /* a FIFO takes the whole word at once */
+        gba_audio_fifo_write(rt, (addr >> 2) & 1, value);
     } else {
         write16(rt, addr & ~3u, value & 0xFFFF, 0xFFFF);
         write16(rt, (addr & ~3u) + 2, value >> 16, 0xFFFF);

@@ -45,6 +45,8 @@ enum {  /* interrupt request bits (IE, IF) */
 enum {  /* I/O register offsets from 0x04000000 */
     GBA_REG_DISPCNT = 0x000, GBA_REG_DISPSTAT = 0x004, GBA_REG_VCOUNT = 0x006,
     GBA_REG_SOUND_FIRST = 0x060, GBA_REG_SOUND_LAST = 0x0AE,
+    GBA_REG_SOUNDCNT_L = 0x080, GBA_REG_SOUNDCNT_H = 0x082, GBA_REG_SOUNDCNT_X = 0x084,
+    GBA_REG_SOUNDBIAS = 0x088, GBA_REG_FIFO_A = 0x0A0, GBA_REG_FIFO_B = 0x0A4,
     GBA_REG_DMA0SAD = 0x0B0, GBA_REG_DMA3CNT_H = 0x0DE,
     GBA_REG_TM0CNT_L = 0x100, GBA_REG_TM3CNT_H = 0x10E,
     GBA_REG_SIO_FIRST = 0x120, GBA_REG_KEYINPUT = 0x130, GBA_REG_KEYCNT = 0x132,
@@ -110,10 +112,20 @@ typedef struct {
 enum { GBA_EVENT_HBLANK, GBA_EVENT_LINE, GBA_EVENT_TIMER0, GBA_EVENT_COUNT = GBA_EVENT_TIMER0 + 4 };
 
 typedef struct {
+    uint32_t data[8];         /* words waiting; read == write: empty (as in mGBA) */
+    uint32_t read, write;
+    int32_t word;             /* the word playing, shifted down a byte per sample */
+    int remaining;            /* bytes of it still to play */
+    int8_t sample;            /* the byte playing now */
+} GbaFifo;
+
+typedef struct {
     uint64_t start;  /* cycle sample 0 begins: the game's start */
     uint64_t next;   /* the sample made next; sample k covers start + 512 k .. 512 (k + 1) */
     int16_t buffer[GBA_SOUND_BUFFER][2];  /* left, right; a ring */
     uint32_t first, count;
+    int enable;      /* SOUNDCNT_X bit 7: the sound hardware is on */
+    GbaFifo fifo[2]; /* A and B */
 } GbaAudio;
 
 struct GbaRuntime {
@@ -226,8 +238,15 @@ void gba_render_reference_write(GbaRuntime *rt, uint32_t offset);  /* BGxX/BGxY 
 
 void gba_audio_reset(GbaRuntime *rt);
 void gba_audio_run(GbaRuntime *rt, uint64_t now);  /* makes the samples that end by now */
+/* A write to a sound register (0x060-0x0AE) of the bytes in `mask`; returns what the
+ * register holds after it. */
+uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask);
+void gba_audio_fifo_write(GbaRuntime *rt, int fifo, uint32_t value);  /* a 32-bit write */
+void gba_audio_timer(GbaRuntime *rt, int n, uint64_t when);  /* timer n overflowed */
+void gba_audio_clear(GbaRuntime *rt);  /* RegisterRamReset's sound part */
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);
 void gba_dma_trigger(GbaRuntime *rt, int timing);  /* 1 = VBlank, 2 = HBlank */
+void gba_dma_fifo(GbaRuntime *rt, int fifo);       /* FIFO A (0) or B (1) wants 4 words */
 
 #endif

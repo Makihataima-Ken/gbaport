@@ -88,6 +88,10 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
             rt->timer[n].reload = merged;  /* used at the next start or overflow */
         return;
     }
+    if (offset >= GBA_REG_SOUND_FIRST && offset <= GBA_REG_SOUND_LAST) {
+        IO(rt, offset) = gba_audio_write(rt, offset, value, mask);
+        return;
+    }
     switch (offset) {
     case GBA_REG_DISPSTAT: {
         uint16_t stat = (uint16_t)((old & 0x0007) | (merged & 0xFF38));

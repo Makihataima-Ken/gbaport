@@ -2,8 +2,10 @@
  *
  * Starting a channel (enable bit 0 -> 1) latches its source, destination and count. An
  * immediate channel runs at once; VBlank and HBlank channels run when the scheduler
- * triggers them. Special timing (sound FIFOs, video capture) is not handled yet. The
- * transfer goes through the normal memory accessors, so it sees every region's rules. */
+ * triggers them. Channels 1 and 2 in special timing feed the sound FIFOs: when a FIFO asks,
+ * the channel whose destination it is copies 4 words, whatever its count, width and
+ * destination step say. Special timing on channels 0 and 3 (video capture) is not handled.
+ * The transfer goes through the normal memory accessors, so it sees every region's rules. */
 #include "gba_runtime.h"
 
 #define IO(rt, offset) ((rt)->io[(offset) >> 1])
@@ -34,19 +36,20 @@ static int32_t step(int control, uint32_t size)
     }
 }
 
-static void run(GbaRuntime *rt, int n)
+static void run(GbaRuntime *rt, int n, int fifo)
 {
     GbaCtx *ctx = &rt->cpu;
     GbaDma *d = &rt->dma[n];
     uint16_t control = IO(rt, base(n) + 10);
-    uint32_t size = control & 0x0400 ? 4 : 2;
-    int dst_control = (control >> 5) & 3, src_control = (control >> 7) & 3;
+    uint32_t size = control & 0x0400 || fifo ? 4 : 2;
+    int dst_control = fifo ? 2 : (control >> 5) & 3, src_control = (control >> 7) & 3;
     if (d->src >= 0x08000000u && d->src < 0x0E000000u && src_control == 1)
         src_control = 0;  /* the cartridge bus cannot count down */
     int32_t dst_step = step(dst_control, size), src_step = step(src_control, size);
+    uint32_t count = fifo ? 4 : d->count;
     if (gba_save_is_eeprom(rt, d->dst) || gba_save_is_eeprom(rt, d->src))
         gba_eeprom_dma(rt, d->count);  /* the length tells the EEPROM's size */
-    for (uint32_t i = 0; i < d->count; i++) {
+    for (uint32_t i = 0; i < count; i++) {
         if (size == 4)
             gba_write32(ctx, d->dst & ~3u, gba_read32(ctx, d->src & ~3u));
         else
@@ -54,7 +57,7 @@ static void run(GbaRuntime *rt, int n)
         d->src += (uint32_t)src_step;
         d->dst += (uint32_t)dst_step;
     }
-    ctx->cycles += 4 + 2 * (uint64_t)d->count;
+    ctx->cycles += 4 + 2 * (uint64_t)count;
     int timing = (control >> 12) & 3;
     if ((control & 0x0200) && timing != 0) {  /* repeat: wait for the next trigger */
         d->count = word_count(rt, n);
@@ -78,7 +81,7 @@ void gba_dma_write(GbaRuntime *rt, int n, uint16_t control)
     d->dst = reg32(rt, base(n) + 4) & dst_mask[n];
     d->count = word_count(rt, n);
     if (((control >> 12) & 3) == 0)
-        run(rt, n);
+        run(rt, n, 0);
 }
 
 void gba_dma_trigger(GbaRuntime *rt, int timing)
@@ -86,6 +89,18 @@ void gba_dma_trigger(GbaRuntime *rt, int timing)
     for (int n = 0; n < 4; n++) {
         uint16_t control = IO(rt, base(n) + 10);
         if ((control & 0x8000) && ((control >> 12) & 3) == timing)
-            run(rt, n);
+            run(rt, n, 0);
+    }
+}
+
+void gba_dma_fifo(GbaRuntime *rt, int fifo)
+{
+    for (int n = 1; n <= 2; n++) {
+        uint16_t control = IO(rt, base(n) + 10);
+        if ((control & 0x8000) && ((control >> 12) & 3) == 3 &&
+            rt->dma[n].dst == GBA_REG_FIFO_A + 0x04000000u + 4u * (uint32_t)fifo) {
+            run(rt, n, 1);
+            return;
+        }
     }
 }

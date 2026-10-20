@@ -31,8 +31,7 @@ static void register_ram_reset(GbaRuntime *rt, uint32_t flags)
         IO(rt, GBA_REG_RCNT) = 0x8000;
     }
     if (flags & 0x40)
-        for (uint32_t r = GBA_REG_SOUND_FIRST; r <= GBA_REG_SOUND_LAST; r += 2)
-            IO(rt, r) = 0;
+        gba_audio_clear(rt);
     if (flags & 0x80) {
         uint16_t keep[0x200];
         memcpy(keep, rt->io, sizeof keep);

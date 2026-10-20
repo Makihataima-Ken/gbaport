@@ -2,7 +2,8 @@
  *
  * A ticking timer is not stepped: its counter is worked out from the cycles since it last
  * held a known value, and its overflow is a scheduler event. Count-up timers (bit 2, not
- * timer 0) tick when the timer below them overflows. */
+ * timer 0) tick when the timer below them overflows. Timers 0 and 1 also pace the sound
+ * FIFOs. */
 #include "gba_runtime.h"
 
 #define NEVER UINT64_MAX
@@ -53,25 +54,27 @@ void gba_timer_write(GbaRuntime *rt, int n, uint16_t control)
     gba_reschedule(rt);
 }
 
-static void overflowed(GbaRuntime *rt, int n);
+static void overflowed(GbaRuntime *rt, int n, uint64_t when);
 
-static void count_up(GbaRuntime *rt, int n)
+static void count_up(GbaRuntime *rt, int n, uint64_t when)
 {
     GbaTimer *t = &rt->timer[n];
     if (!(t->control & 0x80) || !(t->control & 0x04))
         return;
     if (++t->counter == 0) {
         t->counter = t->reload;
-        overflowed(rt, n);
+        overflowed(rt, n, when);
     }
 }
 
-static void overflowed(GbaRuntime *rt, int n)
+static void overflowed(GbaRuntime *rt, int n, uint64_t when)
 {
     if (rt->timer[n].control & 0x40)
         gba_request_irq(rt, (uint16_t)(GBA_IRQ_TIMER0 << n));
+    if (n < 2)
+        gba_audio_timer(rt, n, when);
     if (n < 3)
-        count_up(rt, n + 1);
+        count_up(rt, n + 1, when);
 }
 
 void gba_timer_overflow(GbaRuntime *rt, int n, uint64_t when)
@@ -80,5 +83,5 @@ void gba_timer_overflow(GbaRuntime *rt, int n, uint64_t when)
     t->counter = t->reload;
     t->start = when;
     schedule(rt, n);
-    overflowed(rt, n);
+    overflowed(rt, n, when);
 }
