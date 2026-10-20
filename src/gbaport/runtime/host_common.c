@@ -350,6 +350,13 @@ int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
     return (int)end;
 }
 
+double host_sound_speed(double queued, double target)
+{
+    double error = (queued - target) / target;
+    error = error < -1 ? -1 : error > 1 ? 1 : error;
+    return 1.0 + 0.01 * error;  /* at most 1% off: too little to hear as a change of pitch */
+}
+
 int host_write_bmp(const char *path, const uint32_t *pixels)
 {
     enum { W = GBA_SCREEN_WIDTH, H = GBA_SCREEN_HEIGHT, ROW = W * 3, DATA = ROW * H };

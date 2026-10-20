@@ -192,17 +192,21 @@ def run_program(command: list[str], env: dict[str, str] | None = None) -> subpro
 
 def run_rom(
     rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None,
-    host: str = "headless", args: tuple[str, ...] = (),
+    host: str = "headless", args: tuple[str, ...] = (), env: dict[str, str] | None = None,
 ) -> Run:
     """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set).
 
     The game's save file is ``save``; without one, every run starts with a blank save.
-    ``args`` go to the program after the usual ones.
+    ``args`` go to the program after the usual ones. The window host runs with SDL's dummy
+    video and sound drivers (no window opens, nothing plays), unless ``env`` says otherwise.
     """
     program = native_program(rom, host)
     path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
     path.write_bytes(rom_file or rom.data)
-    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy"} if host == "sdl" else None
+    if host == "sdl":
+        env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy", "SDL_AUDIO_DRIVER": "dummy", **(env or {})}
+    elif env:
+        env = {**os.environ, **env}
     with tempfile.TemporaryDirectory() as scratch:
         save_path = save or Path(scratch) / "game.sav"
         command = [str(program), str(path), "--frames", str(frames), "--save", str(save_path), *args]

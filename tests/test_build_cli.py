@@ -31,7 +31,7 @@ def test_build_makes_the_window_program_by_default(tmp_path, capsys):
     rom_path, files = _build(tmp_path)
     (program,) = [p for p in files if p.stem == "ATST"]
     assert f"built {program}" in capsys.readouterr().out
-    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy"}  # no window opens
+    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy", "SDL_AUDIO_DRIVER": "dummy"}  # no window, no sound
     assert "[--scale N] [--fast]" in run_program([str(program)], env).stderr  # the window host
     result = run_program([str(program), rom_path, "--frames", "60"], env)
     assert result.returncode == 0  # a run limited by --frames ends at Stop, as headless does

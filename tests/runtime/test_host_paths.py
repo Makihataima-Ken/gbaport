@@ -13,7 +13,7 @@ def test_rom_and_save_paths_may_have_any_characters(tmp_path, host):
     folder.mkdir()
     path = folder / "game.gba"
     path.write_bytes(rom.data)
-    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy"}  # no window opens
+    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy", "SDL_AUDIO_DRIVER": "dummy"}  # no window, no sound
     result = run_program([str(native_program(rom, host)), str(path), "--frames", "600"], env)
     assert result.returncode == 0, result.stderr
     assert (folder / "game.sav").stat().st_size == 0x8000  # next to the ROM, by default

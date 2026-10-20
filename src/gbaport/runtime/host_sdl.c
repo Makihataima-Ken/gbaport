@@ -1,7 +1,7 @@
 /* host_sdl.c - run a recompiled game in a window (SDL3).
  *
  *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--registers]
- *              [--screenshot PATH] [--scale N] [--fast]
+ *              [--screenshot PATH] [--audio PATH] [--scale N] [--fast]
  *
  * Keyboard: arrows, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select. A
  * gamepad works too: its right face button is A, the bottom one B. The game runs at the
@@ -10,7 +10,13 @@
  * window ends the run with exit status 0. While the game is stopped (the BIOS Stop call)
  * the screen is dark and a key press wakes it, if the game asked for that; in a run
  * limited by --frames, a Stop that no scripted press wakes ends the run instead. The other
- * options and exit statuses are those of host_headless.c. */
+ * options and exit statuses are those of host_headless.c.
+ *
+ * The sound plays on the default sound device: an SDL audio stream takes the GBA's
+ * samples (32768 a second) and converts them to the device's rate. About three frames'
+ * worth wait in it; when the device's clock and the frame pacing drift apart, the stream
+ * plays up to 1% faster or slower to keep it so. Without a sound device the game runs
+ * silent (one warning); with --fast it runs silent too. */
 #include <stdio.h>
 #include <string.h>
 
@@ -29,6 +35,9 @@ static SDL_Gamepad *gamepad;
 static uint32_t pixels[GBA_SCREEN_WIDTH * GBA_SCREEN_HEIGHT];
 static int closed;
 static Uint64 pace_start, paced;
+static SDL_AudioStream *sound;  /* NULL: no sound */
+
+enum { SOUND_TARGET = 3 * 549 };  /* samples to keep queued: about three frames */
 
 static const SDL_Scancode KEYBOARD[10] = {
     SDL_SCANCODE_X, SDL_SCANCODE_Z, SDL_SCANCODE_BACKSPACE, SDL_SCANCODE_RETURN,
@@ -97,6 +106,16 @@ static void pace(void)
         paced = 0;
 }
 
+/* The frame's samples (host_frame put them in options.sound) go to the sound device. */
+static void play_sound(void)
+{
+    if (!sound)
+        return;
+    SDL_PutAudioStreamData(sound, options.sound, (int)(options.sound_count * sizeof options.sound[0]));
+    int queued = SDL_GetAudioStreamQueued(sound) / (int)sizeof options.sound[0];
+    SDL_SetAudioStreamFrequencyRatio(sound, (float)host_sound_speed(queued, SOUND_TARGET));
+}
+
 static void on_frame(GbaRuntime *rt, void *user)
 {
     (void)user;
@@ -110,6 +129,7 @@ static void on_frame(GbaRuntime *rt, void *user)
     SDL_RenderPresent(renderer);
     pace();
     host_frame(&options, rt);
+    play_sound();
     gba_set_keys(rt, held_keys());
 }
 
@@ -183,6 +203,26 @@ static int open_window(void)
     return 0;
 }
 
+/* The default sound device, at its own rate, fed by a stream that converts the GBA's. */
+static void open_sound(void)
+{
+    if (options.fast)
+        return;
+    const SDL_AudioSpec gba = {SDL_AUDIO_S16, 2, GBA_SOUND_RATE};
+    SDL_AudioDeviceID device = 0;
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO))
+        device = SDL_OpenAudioDevice(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, NULL);
+    if (device)
+        sound = SDL_CreateAudioStream(&gba, NULL);
+    if (sound && SDL_BindAudioStream(device, sound))
+        return;
+    fprintf(stderr, "warning: no sound: %s\n", SDL_GetError());
+    SDL_DestroyAudioStream(sound);
+    sound = NULL;
+    if (device)
+        SDL_CloseAudioDevice(device);
+}
+
 /* The window's picture, as the last frame left it, into a BMP file. */
 static void screenshot(void)
 {
@@ -205,10 +245,12 @@ int main(int argc, char **argv)
         return status;
     if (open_window() != 0)
         return 2;
+    open_sound();
     GbaEnd end = gba_run(&rt);
     if (options.screenshot)
         screenshot();
     status = host_finish(&options, &rt, end);
+    SDL_DestroyAudioStream(sound);
     SDL_Quit();
     return closed ? 0 : status;
 }

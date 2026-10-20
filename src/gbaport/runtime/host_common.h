@@ -43,6 +43,10 @@ void host_frame(HostOptions *o, GbaRuntime *rt);
 int host_script_wake(HostOptions *o);
 /* Stores the save, finishes the sound file, reports the end and returns the exit status. */
 int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end);
+/* How fast a sound device should play the GBA's samples (1.0: as they come) when
+ * `queued` of them wait: a little faster with more than `target`, slower with fewer, so
+ * the queue stays near `target` however the device's clock and the frame pacing drift. */
+double host_sound_speed(double queued, double target);
 /* Writes 240x160 pixels (0x00RRGGBB) as a BMP file; returns 0 on success. */
 int host_write_bmp(const char *path, const uint32_t *pixels);
 
