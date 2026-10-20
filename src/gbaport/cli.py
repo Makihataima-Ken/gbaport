@@ -271,20 +271,33 @@ def _run_build(args: argparse.Namespace) -> int:
     return 0
 
 
+def _at_least(lowest: int):
+    """An argparse type: a whole number no less than ``lowest``."""
+    def number(text: str) -> int:
+        value = int(text)
+        if value < lowest:
+            raise argparse.ArgumentTypeError(f"{text} is less than {lowest}")
+        return value
+    return number
+
+
 def _add_verify_command(commands) -> None:
     verify_command = commands.add_parser(
         "verify", help="play a game natively and in mGBA, and compare their pictures"
     )
     verify_command.add_argument("rom", help="path to a .gba file")
     verify_command.add_argument(
-        "--frames", type=int, default=600, help="frames to play (default 600: ten seconds)"
+        "--frames",
+        type=_at_least(1),
+        default=600,
+        help="frames to play (default 600: ten seconds)",
     )
     verify_command.add_argument(
         "--input", help="input file both play (see gbaport/inputs.py; default: no keys)"
     )
     verify_command.add_argument(
         "--slack",
-        type=int,
+        type=_at_least(0),
         default=1,
         help="frames a picture may come early or late (default 1)",
     )

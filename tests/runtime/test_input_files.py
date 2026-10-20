@@ -3,7 +3,7 @@ as gbaport-mgba does: the same keys give the same pictures, frame for frame."""
 
 import pytest
 from romtest import build_test_rom, run_rom
-from test_mgba import INPUT, picture_hash
+from test_mgba import INPUT, LONG_COMMENT, picture_hash
 
 from gbaport.native.mgba import run_mgba
 
@@ -53,3 +53,12 @@ def test_an_input_file_from_a_windows_editor_plays_the_same(tmp_path):
     assert run.status == 4, run.stderr
     assert (tmp_path / "ours.hashes").read_text(encoding="utf-8").split()[-1] == \
         picture_hash([0x0100] * 38400)  # R
+
+
+def test_a_long_comment_is_a_comment_to_the_end_of_its_line(tmp_path):
+    (tmp_path / "long.input").write_text(LONG_COMMENT, encoding="utf-8")
+    run = run_rom(build_test_rom("input_echo"), frames=15, args=(
+        "--input", str(tmp_path / "long.input"), "--hashes", str(tmp_path / "ours.hashes")))
+    assert run.status == 4, run.stderr
+    assert (tmp_path / "ours.hashes").read_text(encoding="utf-8").split()[-1] == \
+        picture_hash([0] * 38400)

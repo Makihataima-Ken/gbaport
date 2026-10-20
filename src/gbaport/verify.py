@@ -18,6 +18,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from gbaport.inputs import format_input, load_input
 from gbaport.native.mgba import run_mgba
 
 
@@ -43,9 +44,9 @@ def _pictures(hashes: list[str]) -> list[tuple[str, int, int]]:
 
 def _past_extras(a: list[tuple[str, int, int]], b: list[tuple[str, int, int]], i: int, j: int,
                  slack: int) -> tuple[int, int] | None:
-    """Where the two show the same picture again (or end) after pictures only one of them
-    shows, at most ``slack`` frames of them on each side, the fewest first; None when
-    there is no such place."""
+    """Where the two show the same picture again (the end, at the last) after pictures only
+    one of them shows, at most ``slack`` frames of them on each side, the fewest first;
+    None when there is no such place."""
     def reach(runs: list[tuple[str, int, int]], start: int) -> list[int]:
         ends, frames = [start], 0
         while ends[-1] < len(runs) and frames + runs[ends[-1]][2] <= slack:
@@ -55,29 +56,41 @@ def _past_extras(a: list[tuple[str, int, int]], b: list[tuple[str, int, int]], i
 
     places = [(x, y) for x in reach(a, i) for y in reach(b, j) if (x, y) != (i, j)]
     for x, y in sorted(places, key=lambda place: place[0] - i + place[1] - j):
-        if x == len(a) or y == len(b) or a[x][0] == b[y][0]:
+        if a[x][0] == b[y][0]:
             return x, y
     return None
+
+
+_END = "<end>"  # a picture both show after the last frame
 
 
 def compare(ours: list[str], theirs: list[str], slack: int = 1) -> Comparison:
     """Our frames' hashes against mGBA's, over the frames both have. One pass, so a long
     replay that parts early takes no longer than one that does not."""
     frames = min(len(ours), len(theirs))
-    a, b = _pictures(ours[:frames]), _pictures(theirs[:frames])
+    # Both end on the same picture, longer than the slack: a picture one shows after the
+    # other has stopped changing is a picture only one shows, held to the slack like any.
+    end = (_END, frames + 1, slack + 1)
+    a, b = _pictures(ours[:frames]) + [end], _pictures(theirs[:frames]) + [end]
+
+    def parted(i: int, j: int) -> tuple[int, int]:
+        """Where they part; a side past its last picture parts where the other shows one."""
+        ours_at = a[i][1] if a[i] is not end else b[j][1]
+        return ours_at, b[j][1] if b[j] is not end else a[i][1]
+
     i = j = apart = 0
     while i < len(a) and j < len(b):
         if a[i][0] == b[j][0]:
             if abs(a[i][1] - b[j][1]) > slack:
-                return Comparison(frames, len(b), apart, (a[i][1], b[j][1]))
+                return Comparison(frames, len(b) - 1, apart, parted(i, j))
             apart = max(apart, abs(a[i][1] - b[j][1]))
             i, j = i + 1, j + 1
             continue
         place = _past_extras(a, b, i, j, slack)
         if place is None:
-            return Comparison(frames, len(b), apart, (a[i][1], b[j][1]))
+            return Comparison(frames, len(b) - 1, apart, parted(i, j))
         i, j = place
-    return Comparison(frames, len(b), apart, None)
+    return Comparison(frames, len(b) - 1, apart, None)
 
 
 def report(comparison: Comparison) -> str:
@@ -93,16 +106,27 @@ def read_hashes(path: Path) -> list[str]:
     return path.read_text(encoding="utf-8").split() if path.exists() else []
 
 
+NATIVE_TIMEOUT = 3600  # seconds
+
+
 def play(program: Path, rom: Path, frames: int, input: Path | None, folder: Path,
          extra: tuple[str, ...] = ()) -> subprocess.CompletedProcess:
-    """Runs the native build with a blank save; its hashes go to folder/ours.hashes."""
-    save = folder / "verify.sav"
+    """Runs the native build with a blank save; its hashes go to folder/ours.hashes (none
+    from an earlier run are left if it stops before writing them)."""
+    save, hashes = folder / "verify.sav", folder / "ours.hashes"
     save.unlink(missing_ok=True)
+    hashes.unlink(missing_ok=True)
     command = [str(program), str(rom), "--frames", str(frames), "--save", str(save),
-               "--hashes", str(folder / "ours.hashes"), *extra]
+               "--hashes", str(hashes), *extra]
     if input is not None:
         command += ["--input", str(input)]
-    return subprocess.run(command, capture_output=True, text=True, timeout=3600, check=False)
+    try:
+        # the hosts write UTF-8 (paths, the game's debug log)
+        return subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace",
+                              timeout=NATIVE_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        raise TimeoutError(f"the native build did not finish {frames} frames in "
+                           f"{NATIVE_TIMEOUT} s") from None
 
 
 def _bmp_colours(data: bytes) -> list[int]:
@@ -142,10 +166,12 @@ def where_they_part(program: Path, rom: Path, parted: tuple[int, int], input: Pa
                     folder: Path) -> Path:
     """Our picture at our frame and mGBA's at its own, side by side: folder/frame-N.png."""
     ours, theirs = parted
-    shot = folder / "ours.bmp"
+    shot, raw = folder / "ours.bmp", folder / "mgba.raw"
+    shot.unlink(missing_ok=True)  # (none from an earlier run)
+    raw.unlink(missing_ok=True)
     play(program, rom, ours, input, folder, ("--screenshot", str(shot)))
-    run_mgba(rom, theirs, input=input, picture=folder / "mgba.raw", log=lambda line: None)
-    mgba = list(struct.unpack("<38400H", (folder / "mgba.raw").read_bytes()))
+    run_mgba(rom, theirs, input=input, picture=raw, log=lambda line: None)
+    mgba = list(struct.unpack("<38400H", raw.read_bytes()))
     png = folder / f"frame-{ours}.png"
     write_png(png, [_bmp_colours(shot.read_bytes()), mgba])
     return png
@@ -157,6 +183,10 @@ def verify(program: Path, rom: Path, frames: int, input: Path | None, folder: Pa
     when they agree within ``slack`` frames for all of them, 1 when they part or the native
     build stopped first."""
     folder.mkdir(parents=True, exist_ok=True)
+    if input is not None:  # both programs get the presses as Python reads them
+        presses = load_input(input)
+        input = folder / "verify.input"
+        input.write_text(format_input(presses), encoding="utf-8")
     run = play(program, rom, frames, input, folder)
     if run.returncode not in (0, 4):
         last = (run.stderr.strip().splitlines() or ["(no message)"])[-1]

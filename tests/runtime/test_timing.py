@@ -60,6 +60,16 @@ def test_an_hblank_dma_slows_the_cpu_as_much_as_in_mgba():
     assert abs(ours[1] - mgba[1]) <= 1  # a loop takes many more cycles than DMA_SLACK
 
 
+def test_register_ram_reset_puts_back_the_power_on_wait_states():
+    """A busy loop in the cartridge with fast waits, then after RegisterRamReset reset the
+    registers (WAITCNT among them)."""
+    rom = build_test_rom("ramreset_waits")
+    ours, mgba = drawn(our_picture(rom, 20), 3), drawn(mgba_picture(rom.data, 20), 3)
+    assert ours[2] == mgba[2] == 0  # WAITCNT
+    assert ours[0] == mgba[0]
+    assert ours[1] == mgba[1] < mgba[0]  # slower again
+
+
 def test_the_eeprom_is_busy_as_long_as_in_mgba():
     """Cycles from writing a block (by DMA) until the EEPROM is ready, and the reads that
     took."""

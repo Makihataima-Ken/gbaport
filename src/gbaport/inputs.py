@@ -52,7 +52,7 @@ def parse_input(text: str, source: str = "input") -> list[Press]:
         if not line:
             continue
         fields = line.split()
-        if len(fields) != 2 or not fields[0].isdigit():
+        if len(fields) != 2 or not (fields[0].isascii() and fields[0].isdigit()):
             raise InputError(f"{source}, line {number}: expected 'FRAME KEYS', got {line!r}")
         try:
             keys = keys_from_names(fields[1])

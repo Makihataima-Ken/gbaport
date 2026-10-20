@@ -63,7 +63,6 @@ static void power_on(GbaRuntime *rt)
     rt->cpu.cycles = GBA_CYCLES_HDRAW - GBA_START_HBLANK;  /* the start line began at 0 */
     reset_cpu(rt);
     gba_reset_io(rt);
-    gba_waitcnt(rt, rt->io[GBA_REG_WAITCNT >> 1]);
     gba_audio_reset(rt);
     rt->bios_bus = 0xE129F000u;  /* the opcode the BIOS fetches last before starting the game */
     gba_scheduler_start(rt);

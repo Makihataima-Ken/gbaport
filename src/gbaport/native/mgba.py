@@ -24,6 +24,7 @@ MGBA_URL = f"https://github.com/mgba-emu/mgba/archive/refs/tags/{MGBA_VERSION}.t
 MGBA_SHA256 = "91d6fbd32abcbdf030d58d3f562de25ebbc9d56040d513ff8e5c19bee9dacf14"
 SOURCE = Path(__file__).parent / "mgba_oracle"
 SOURCE_FILES = ("CMakeLists.txt", "mgba.c")
+MGBA_TIMEOUT = 600  # seconds a run may take
 
 
 class MgbaError(OSError):
@@ -95,6 +96,11 @@ def run_mgba(rom: Path, frames: int, *, input: Path | None = None, picture: Path
                          ("--hashes", hashes)):
         if path is not None:
             command += [option, str(path)]
-    result = subprocess.run(command, capture_output=True, text=True, timeout=600, check=False)
+    try:
+        # the program writes UTF-8 (paths outside the ANSI code page)
+        result = subprocess.run(command, capture_output=True, encoding="utf-8", errors="replace",
+                                timeout=MGBA_TIMEOUT, check=False)
+    except subprocess.TimeoutExpired:
+        raise MgbaError(f"mGBA did not finish {frames} frames in {MGBA_TIMEOUT} s") from None
     if result.returncode != 0:
         raise MgbaError(f"mGBA failed (exit status {result.returncode}): {result.stderr.strip()}")

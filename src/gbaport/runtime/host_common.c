@@ -236,6 +236,8 @@ static int load_input(HostOptions *o, const char *path)
     char line[256];
     int ok = 1;
     for (int number = 1; ok && fgets(line, sizeof line, f); number++) {
+        if (!strchr(line, '\n'))  /* a longer line (a long comment): its end goes too */
+            for (int c = fgetc(f); c != EOF && c != '\n'; c = fgetc(f)) {}
         if (number == 1 && strncmp(line, "\xEF\xBB\xBF", 3) == 0)
             memmove(line, line + 3, strlen(line + 3) + 1);  /* a UTF-8 byte order mark */
         line[strcspn(line, "#\r\n")] = 0;

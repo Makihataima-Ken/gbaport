@@ -5,9 +5,12 @@ import pytest
 from mgbaref import mgba_picture
 from romtest import build_test_rom
 
+from gbaport.native import mgba as mgba_module
 from gbaport.native.mgba import MgbaError, run_mgba
 
 INPUT = "0 none\n10 A\n20 B+UP\n30 none\n"
+# a comment longer than the C readers' 255-byte lines, its end looking like a press
+LONG_COMMENT = "0 none\n#" + "x" * 254 + "12 B\n"
 
 
 def picture_hash(colours: list[int]) -> str:
@@ -63,3 +66,35 @@ def test_mgba_takes_any_file_names_and_an_input_file_from_a_windows_editor(tmp_p
     assert (folder / "h.hashes").read_text(encoding="utf-8").split()[-1] == \
         picture_hash([0x0002] * 38400)
     assert (folder / "p.raw").stat().st_size == 2 * 38400
+
+
+def test_mgba_stops_at_a_line_that_is_not_a_press(tmp_path):
+    _, path = echo(tmp_path)
+    (tmp_path / "bad.input").write_text("10 A\nhello\n", encoding="utf-8")
+    with pytest.raises(MgbaError, match=r"exit status 2\): error: .*bad\.input, line 2"):
+        run_mgba(path, 10, input=tmp_path / "bad.input")
+
+
+def test_a_long_comment_is_a_comment_to_mgba_to_the_end_of_its_line(tmp_path):
+    _, path = echo(tmp_path)
+    (tmp_path / "long.input").write_text(LONG_COMMENT, encoding="utf-8")
+    run_mgba(path, 15, input=tmp_path / "long.input", hashes=tmp_path / "h.hashes")
+    assert (tmp_path / "h.hashes").read_text(encoding="utf-8").split()[-1] == \
+        picture_hash([0] * 38400)
+
+
+def test_mgbas_messages_reach_python_whatever_the_path(tmp_path):
+    """An error naming a path outside the ANSI code page (mGBA's program writes UTF-8)."""
+    folder = tmp_path / "\u3042-\u30b2\u30fc\u30e0"
+    folder.mkdir()
+    _, path = echo(folder)
+    (folder / "bad.input").write_text("10 A\n5 B\n", encoding="utf-8")
+    with pytest.raises(MgbaError, match="\u3042-\u30b2\u30fc\u30e0.*bad\\.input, line 2"):
+        run_mgba(path, 10, input=folder / "bad.input")
+
+
+def test_an_mgba_run_that_takes_too_long_is_an_error(tmp_path, monkeypatch):
+    _, path = echo(tmp_path)
+    monkeypatch.setattr(mgba_module, "MGBA_TIMEOUT", 0.001)
+    with pytest.raises(MgbaError, match="mGBA did not finish 40 frames in 0.001 s"):
+        run_mgba(path, 40)

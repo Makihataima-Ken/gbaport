@@ -49,6 +49,7 @@ void gba_reset_io(GbaRuntime *rt)
     IO(rt, GBA_REG_RCNT) = 0x8000;
     IO(rt, GBA_REG_POSTFLG) = 0x0001;        /* booted */
     rt->keys_last = 0x400;
+    gba_waitcnt(rt, 0);  /* WAITCNT is 0 again: the power-on wait states */
     gba_render_frame_start(rt);
 }
 

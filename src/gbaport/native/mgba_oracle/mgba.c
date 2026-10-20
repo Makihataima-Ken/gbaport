@@ -141,13 +141,15 @@ static int load_input(const char *path)
     }
     char line[256];
     for (int number = 1; fgets(line, sizeof line, f); number++) {
+        if (!strchr(line, '\n'))  /* a longer line (a long comment): its end goes too */
+            for (int c = fgetc(f); c != EOF && c != '\n'; c = fgetc(f)) {}
         if (number == 1 && strncmp(line, "\xEF\xBB\xBF", 3) == 0)
             memmove(line, line + 3, strlen(line + 3) + 1);  /* a UTF-8 byte order mark */
         line[strcspn(line, "#\r\n")] = 0;
         char names[200];
         long frame;
         int fields = sscanf(line, "%ld %199s", &frame, names);
-        if (fields <= 0)
+        if (fields == EOF)
             continue;  /* a blank line or a comment */
         long keys = fields == 2 ? key_bits(names) : -1;
         if (keys < 0 || frame < 0 || (press_count && frame < presses[press_count - 1].frame)) {

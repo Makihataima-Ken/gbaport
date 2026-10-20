@@ -40,6 +40,8 @@ def test_key_names_are_the_hosts():
     ("900 A\n10 B\n", "game.input, line 2: frame 10 comes before frame 900"),
     ("900 JUMP\n", "game.input, line 1: unknown key 'JUMP'"),
     ("-5 A\n", "game.input, line 1: expected 'FRAME KEYS', got '-5 A'"),
+    ("\u0661\u0662 A\n", "game.input, line 1: expected 'FRAME KEYS', got '\u0661\u0662 A'"),
+    ("\u00b2 A\n", "game.input, line 1: expected 'FRAME KEYS', got '\u00b2 A'"),
 ])
 def test_a_bad_input_file_says_which_line(text, message):
     with pytest.raises(InputError, match="^" + message.replace("(", r"\(").replace(")", r"\)")):
