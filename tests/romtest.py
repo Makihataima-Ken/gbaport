@@ -20,7 +20,7 @@ import struct
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import gbaport.native.build as native
@@ -44,6 +44,7 @@ STT_FUNC = 2
 class TestRom:
     data: bytes
     config: str  # game.toml text
+    symbols: dict[str, int] = field(default_factory=dict)  # the ELF's, by name
 
 
 def _digest(*parts: bytes | str) -> str:
@@ -135,7 +136,9 @@ def build_test_rom(name: str, data: str = "") -> TestRom:
         _run([llvm_tool("llvm-objcopy"), "-O", "binary", str(elf), str(binary)])
         config_path.write_text(config_for(elf_symbols(elf.read_bytes())), encoding="utf-8")
         rom_path.write_bytes(_with_header(binary.read_bytes()))
-    return TestRom(rom_path.read_bytes(), config_path.read_text(encoding="utf-8"))
+    elf = elf_symbols((folder / "game.elf").read_bytes())
+    symbols = {name: value for name, (value, _) in elf.items()}
+    return TestRom(rom_path.read_bytes(), config_path.read_text(encoding="utf-8"), symbols)
 
 
 # ---- running a test ROM natively --------------------------------------------------------

@@ -87,13 +87,13 @@ def mgba_program(log: Callable[[str], None] = print) -> Path:
 
 
 def run_mgba(rom: Path, frames: int, *, input: Path | None = None, picture: Path | None = None,
-             sound: Path | None = None, hashes: Path | None = None,
+             sound: Path | None = None, hashes: Path | None = None, trace: Path | None = None,
              log: Callable[[str], None] = print) -> None:
     """Runs ``rom`` in mGBA for ``frames`` frames and writes what was asked for (see
     ``mgba_oracle/mgba.c``)."""
     command = [str(mgba_program(log)), str(rom), "--frames", str(frames)]
     for option, path in (("--input", input), ("--picture", picture), ("--sound", sound),
-                         ("--hashes", hashes)):
+                         ("--hashes", hashes), ("--trace", trace)):
         if path is not None:
             command += [option, str(path)]
     try:

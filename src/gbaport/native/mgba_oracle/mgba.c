@@ -1,7 +1,7 @@
 /* mgba.c - run a ROM in mGBA: the reference the tests and `gbaport verify` compare with.
  *
  *     gbaport-mgba ROM --frames N [--input FILE] [--picture PATH] [--sound PATH]
- *                  [--hashes PATH]
+ *                  [--hashes PATH] [--trace PATH]
  *
  * Runs N frames from power-on (mGBA's own BIOS replacement, no BIOS file), holding the keys
  * an input file names (gbaport/inputs.py: "FRAME KEYS" lines, held from the FRAME-th VBlank
@@ -11,7 +11,10 @@
  * - --sound writes every sample mGBA mixes (32768 a second, before it resamples them for
  *   playback) as little-endian 16-bit left and right values;
  * - --hashes writes one line a frame: the picture's 64-bit FNV-1a hash (over its colours
- *   as two bytes each, low byte first), as 16 hex digits, the same the hosts write.
+ *   as two bytes each, low byte first), as 16 hex digits, the same the hosts write;
+ * - --trace runs the game an instruction at a time and writes each indirect transfer it
+ *   took once, as "SITE TARGET MODE LR" (gbaport/tracing/transfers.py reads them), but for
+ *   ordinary returns and returns to an outer call (see run_frame_traced).
  * mGBA is built with 16-bit colour, so it works in GBA colours throughout, blending in 5
  * bits per channel like the GBA (its partial darkening rounds differently;
  * test_render_effects.py checks that one against GBATEK's formula). mGBA's own messages
@@ -78,6 +81,8 @@ static char **utf8_arguments(int *argc, char **argv)
 #include <mgba/core/interface.h>
 #include <mgba/core/log.h>
 #include <mgba/gba/core.h>
+#include <mgba/internal/arm/arm.h>
+#include <mgba/internal/gba/gba.h>
 
 #if !defined(COLOR_16_BIT) || defined(COLOR_5_6_5)
 #error "gbaport-mgba needs mGBA built with 16-bit BGR555 colour (CMakeLists.txt sets COLOR_16_BIT)"
@@ -165,6 +170,135 @@ static int load_input(const char *path)
     return 0;
 }
 
+/* ---- the trace ----------------------------------------------------------------------- */
+
+/* Taken indirect transfers, each (site, target, state, lr) once, in an open hash table. */
+typedef struct {
+    uint32_t site, target, lr;
+    uint8_t thumb, used;
+} Hit;
+
+static Hit *hits;
+static size_t hit_slots, hit_count;
+
+static size_t slot(uint32_t site, uint32_t target, uint32_t lr)
+{
+    uint32_t h = 2166136261u;
+    h = (h ^ site) * 16777619u;
+    h = (h ^ target) * 16777619u;
+    h = (h ^ lr) * 16777619u;
+    return h & (hit_slots - 1);
+}
+
+static void remember(uint32_t site, uint32_t target, int thumb, uint32_t lr)
+{
+    if (2 * (hit_count + 1) > hit_slots) {  /* grow: twice the slots, everything again */
+        Hit *old = hits;
+        size_t old_slots = hit_slots;
+        hit_slots = hit_slots ? 2 * hit_slots : 4096;
+        hits = calloc(hit_slots, sizeof *hits);
+        if (!hits) {
+            fprintf(stderr, "error: out of memory for the trace\n");
+            exit(3);
+        }
+        hit_count = 0;
+        for (size_t i = 0; i < old_slots; i++)
+            if (old[i].used)
+                remember(old[i].site, old[i].target, old[i].thumb, old[i].lr);
+        free(old);
+    }
+    size_t i = slot(site, target, lr);
+    for (; hits[i].used; i = (i + 1) & (hit_slots - 1))
+        if (hits[i].site == site && hits[i].target == target && hits[i].lr == lr
+                && hits[i].thumb == thumb)
+            return;
+    hits[i] = (Hit){site, target, lr, (uint8_t)thumb, 1};
+    hit_count++;
+}
+
+/* An instruction that may write the PC with a value it does not hold itself: BX, a POP or
+ * LDM with the PC, and anything else that writes R15 (B, BL and SWI are direct). */
+static int indirect(uint32_t opcode, int thumb)
+{
+    if (thumb)
+        return (opcode & 0xFF00) == 0x4700      /* BX */
+            || (opcode & 0xFF00) == 0xBD00      /* POP {..., pc} */
+            || (opcode & 0xFF87) == 0x4487      /* ADD pc, rm */
+            || (opcode & 0xFF87) == 0x4687;     /* MOV pc, rm */
+    uint32_t kind = opcode >> 25 & 7;
+    if (kind == 5 || (opcode >> 24 & 15) == 15)
+        return 0;                               /* B, BL, SWI */
+    if (kind == 4)
+        return (opcode >> 20 & 1) && (opcode >> 15 & 1);  /* LDM with the PC */
+    return (opcode >> 12 & 15) == 15 || (opcode & 0x0FFFFFF0) == 0x012FFF10;
+}
+
+/* The calls in progress, as their return addresses: the shadow of the game's own stack. */
+enum { SHADOW = 4096 };
+static uint32_t shadow[SHADOW];
+static int depth;
+
+/* One frame, an instruction at a time. A transfer that leaves LR pointing just after it is
+ * a call (BL, or BX after MOV LR, PC). An indirect transfer to the latest call's return
+ * address is an ordinary return; to an outer call's, a return past the calls in between
+ * (the runtime unwinds those); anything else is recorded. The BIOS is left out. */
+static void run_frame_traced(struct mCore *core)
+{
+    struct GBA *gba = core->board;
+    struct ARMCore *cpu = core->cpu;
+    uint32_t frame = gba->video.frameCounter;
+    while (gba->video.frameCounter == frame) {
+        while (cpu->cycles >= cpu->nextEvent)
+            cpu->irqh.processEvents(cpu);
+        int thumb = cpu->executionMode == MODE_THUMB;
+        uint32_t width = thumb ? 2 : 4, site = cpu->gprs[ARM_PC] - width;
+        uint32_t opcode = cpu->prefetch[0], lr = cpu->gprs[ARM_LR];
+        ARMRun(cpu);
+        if (site < 0x02000000u)
+            continue;
+        int now_thumb = cpu->executionMode == MODE_THUMB;
+        uint32_t target = cpu->gprs[ARM_PC] - (now_thumb ? 2 : 4);
+        if (target == site + width)
+            continue;  /* not taken */
+        if (cpu->gprs[ARM_LR] == (site + width) + (uint32_t)thumb) {
+            if (depth == SHADOW) {  /* calls that never return: forget the oldest half */
+                memmove(shadow, shadow + SHADOW / 2, sizeof shadow / 2);
+                depth -= SHADOW / 2;
+            }
+            shadow[depth++] = site + width;
+            if (!indirect(opcode, thumb))
+                continue;  /* BL */
+        } else if (!indirect(opcode, thumb) || target < 0x02000000u) {
+            continue;
+        } else {
+            int back = -1;
+            for (int i = depth - 1; i >= 0 && back < 0; i--)
+                if (shadow[i] == target)
+                    back = i;
+            if (back >= 0) {  /* a return, ordinary or past calls in progress */
+                depth = back;
+                continue;
+            }
+        }
+        remember(site, target, now_thumb, lr);
+    }
+}
+
+static int write_trace(const char *path)
+{
+    FILE *f = open_file(path, "wb");
+    if (!f) {
+        fprintf(stderr, "error: cannot write %s\n", path);
+        return 3;
+    }
+    for (size_t i = 0; i < hit_slots; i++)
+        if (hits[i].used)
+            fprintf(f, "%08x %08x %s %08x\n", (unsigned)hits[i].site, (unsigned)hits[i].target,
+                    hits[i].thumb ? "thumb" : "arm", (unsigned)hits[i].lr);
+    fclose(f);
+    return 0;
+}
+
 /* ---- pictures ---------------------------------------------------------------------- */
 
 static uint64_t picture_hash(const color_t *pixels, unsigned count)
@@ -188,6 +322,7 @@ static FILE *open_out(const char *path)
 int main(int argc, char **argv)
 {
     const char *rom = NULL, *input = NULL, *picture = NULL, *sound_path = NULL, *hashes_path = NULL;
+    const char *trace_path = NULL;
     long frames = -1;
 #ifdef _WIN32
     argv = utf8_arguments(&argc, argv);
@@ -204,6 +339,8 @@ int main(int argc, char **argv)
             sound_path = argv[++i];
         else if (strcmp(argv[i], "--hashes") == 0 && value)
             hashes_path = argv[++i];
+        else if (strcmp(argv[i], "--trace") == 0 && value)
+            trace_path = argv[++i];
         else if (!rom && argv[i][0] != '-')
             rom = argv[i];
         else
@@ -211,7 +348,7 @@ int main(int argc, char **argv)
     }
     if (!rom || frames < 0) {
         fprintf(stderr, "usage: %s ROM --frames N [--input FILE] [--picture PATH] [--sound PATH] "
-                "[--hashes PATH]\n", argv[0]);
+                "[--hashes PATH] [--trace PATH]\n", argv[0]);
         return 2;
     }
     int status = input ? load_input(input) : 0;
@@ -247,7 +384,10 @@ int main(int argc, char **argv)
         while (next < press_count && presses[next].frame <= i)
             keys = presses[next++].keys;
         core->setKeys(core, keys);
-        core->runFrame(core);
+        if (trace_path)
+            run_frame_traced(core);
+        else
+            core->runFrame(core);
         if (hashes)
             fprintf(hashes, "%016llx\n", (unsigned long long)picture_hash(pixels, width * height));
     }
@@ -255,6 +395,8 @@ int main(int argc, char **argv)
         fclose(hashes);
     if (sound)
         fclose(sound);
+    if (trace_path && write_trace(trace_path))
+        return 3;
     FILE *out = open_out(picture);
     if (picture && !out)
         return 3;
