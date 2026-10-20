@@ -26,14 +26,15 @@ licence; `tests/publicroms/jsmolka` has their configs), so the first run needs a
 connection. The window tests build SDL3 the first time (see below) and run with SDL's
 dummy video and sound drivers, so no window opens and nothing plays.
 
-The renderer and sound tests compare every picture, pixel for pixel, and every sound,
-sample by sample, with mGBA's: they build mGBA 0.10.5's GBA core (MPL-2.0, a development
-tool only; nothing ships it) from source the first time, with the same CMake, Ninja and
-clang as SDL3, into the same cache folder. Because the recompiled code's timing is an
-estimate, a change in a sound may come up to two samples (61 microseconds) earlier or
-later than in mGBA. A picture that differs is written next to mGBA's in
-`gbaport-romcache/pictures`, a sound that differs next to mGBA's in
-`gbaport-romcache/sounds` (WAV files), and the test's message names the files.
+The renderer, sound and timing tests compare every picture, pixel for pixel, every
+sound, sample by sample, and the cycles kinds of code take with mGBA's: gbaport builds
+mGBA 0.10.5's GBA core (MPL-2.0, a development tool only; no game ships it) from source
+the first time, with the same CMake, Ninja and clang as SDL3, into the same cache folder.
+Because interrupts reach recompiled code only at loops and returns, a change in a sound
+may come up to two samples (61 microseconds) earlier or later than in mGBA. A picture
+that differs is written next to mGBA's in `gbaport-romcache/pictures`, a sound that
+differs next to mGBA's in `gbaport-romcache/sounds` (WAV files), and the test's message
+names the files.
 
 ## Commands
 
@@ -43,6 +44,7 @@ later than in mGBA. A picture that differs is written next to mGBA's in
     uv run gbaport trace roms/mygame.gba [--port 2345] [--seconds 600]
     uv run gbaport recompile roms/mygame.gba [--out games/XXXX/generated]
     uv run gbaport build roms/mygame.gba [--config games/XXXX/game.toml] [--out games/XXXX]
+    uv run gbaport verify roms/mygame.gba [--frames 600] [--input FILE] [--slack 1]
 
 If Windows Application Control blocks the `gbaport.exe` launcher, run the same commands
 as `uv run python -m gbaport.cli ...`.
@@ -79,9 +81,12 @@ without a window, for tests and scripts. Both programs take:
 - `--save PATH`: the save file (below);
 - `--press FRAME:KEYS`: hold KEYS from that frame on (repeatable). KEYS are A, B, SELECT,
   START, RIGHT, LEFT, UP, DOWN, R and L joined with `+`, or `none`;
+- `--input FILE`: hold the keys an input file names (below), any number of changes;
 - `--registers`: print the CPU registers when the run ends;
 - `--screenshot PATH`: save the last picture as a BMP file;
-- `--audio PATH`: write the sound to a WAV file (16-bit stereo, 32768 samples a second).
+- `--audio PATH`: write the sound to a WAV file (16-bit stereo, 32768 samples a second);
+- `--hashes PATH`: write a hash of each frame's picture, a line a frame (`gbaport verify`
+  compares them with mGBA's).
 
 Lines the game prints through mGBA's debug log go to stdout. The exit status is 0 when
 the window is closed, or when the game executes the BIOS Stop call and nothing wakes it
@@ -109,6 +114,36 @@ Add the address to `games/<game_code>/game.toml` (`thumb_entries` or `entries`, 
 message says) and build again, or record a trace with mGBA (below).
 `games/BT4E/game.toml` is an example: the entries Dragon Ball GT Transformation needs to
 boot and play its first minute.
+
+The game's time is counted as mGBA counts it: each instruction costs its fetches at the
+wait states WAITCNT sets for the memory it runs from, data accesses cost their memory's
+wait states (through mGBA's model of the cartridge's prefetch buffer), and DMA and the
+EEPROM take as long as in mGBA. So the game reaches each picture when it does in mGBA,
+give or take a frame where an interrupt comes in at a loop or a return instead of at once.
+
+## Checking a game against mGBA
+
+`gbaport verify` builds a headless program for the game (into `build/<game_code>-verify`)
+and plays it, and the game in mGBA, from power-on with a blank save, for `--frames`
+frames (600 by default), holding the keys an input file names (`--input`). It compares
+the pictures frame by frame:
+
+    verified 900 frames: 472 pictures in the same order, at most 1 frame apart
+
+A picture may come up to `--slack` frames (1 by default) earlier or later than in mGBA,
+and a picture only one of them shows may last that long. Otherwise the report names the
+frame where the two part, writes both pictures there side by side into a PNG file in the
+same folder, and the exit status is 1. The first frame is left out: the game starts
+halfway down it.
+
+An input file holds the keys, a line each time they change, held from that frame on:
+
+    # the title menu
+    900 A
+    906 none
+    3900 RIGHT+A
+
+The headless and window programs play one with `--input FILE`.
 
 ## Recording traces with mGBA
 

@@ -108,8 +108,10 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
   `gba_call_overflow` with the return address.
 - **Memory.** Region page table (`addr >> 24`) with fast paths for EWRAM, IWRAM, VRAM, OAM,
   palette and ROM; I/O-register writes call handlers (DMA start, timer reload, IRQ ack).
-- **Timing.** Not cycle-accurate. Each generated basic block adds a compile-time cycle
-  estimate to `ctx->cycles`; loop back-edges and function returns check
+- **Timing.** Counted as mGBA counts it (Plan 7a): each instruction adds its fetches at
+  the wait states WAITCNT sets, data accesses add their memory's waits (through mGBA's
+  model of the prefetch buffer) and DMA its transfer time, each before the next memory
+  access sees the time; loop back-edges and function returns check
   `ctx->cycles >= ctx->next_event` and run the scheduler, which advances scanlines and
   delivers HBlank/VBlank/timer/DMA interrupts by calling the recompiled IRQ handler (address
   read from 0x03007FFC). Wait points (`Halt`, `IntrWait`, `VBlankIntrWait`, and recognised
@@ -207,8 +209,9 @@ Needed later:
 - macOS with Xcode 16 or newer, or a macOS CI runner, plus an Apple developer account — Plan 9.
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
 - mGBA 0.10 or newer with its GDB server, dev machine only (`gbaport trace`) — Plan 2b.
-- mGBA 0.10.5's GBA core, built from source by the tests (16-bit colour, no dependencies)
-  as the renderer's reference (Plan 5) and the sound's (Plan 6).
+- mGBA 0.10.5's GBA core, built from source by gbaport (16-bit colour, no dependencies)
+  as the renderer's reference (Plan 5), the sound's (Plan 6), and the timing's and
+  `gbaport verify`'s (Plan 7a).
 
 ## Risks
 
