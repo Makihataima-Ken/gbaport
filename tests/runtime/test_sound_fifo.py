@@ -60,14 +60,28 @@ def test_direct_sound_sounds_like_mgba(writes):
     assert_script_matches(writes, frames=40)
 
 
-def test_a_fifo_timer_that_overflows_every_cycle_does_not_slow_the_game():
+@pytest.mark.parametrize("fifos", [1, 2], ids=["one-fifo", "both-fifos"])
+def test_a_fifo_timer_that_overflows_every_cycle_does_not_slow_the_game(fifos):
+    """A timer reloaded with 0xFFFF overflows every cycle, a game's mistake: the game keeps
+    running (its write at frame 5 silences the sound), the sound keeps time with the
+    frames, and the run takes less time than the GBA would."""
+    control = A_FULL | A_LEFT | A_RIGHT | A_RESET
+    feeds = feed(1, FIFO_A)
+    if fifos == 2:
+        control |= B_FULL | B_LEFT | B_RIGHT | B_RESET
+        feeds += feed(2, FIFO_B)
     rom = build_test_rom("sound", script(
-        ON + [(0, SOUNDCNT_H, A_FULL | A_LEFT | A_RIGHT | A_RESET)] + feed(1, FIFO_A) + rate(0, 1)))
+        ON + [(0, SOUNDCNT_H, control)] + feeds + rate(0, 1) + [(5, SOUNDCNT_H, 0)]))
     run_rom(rom, frames=1)  # builds the program
     start = time.perf_counter()
     run = run_rom(rom, frames=60)
     assert run.status == 4, run.stderr
     assert time.perf_counter() - start < 60 / 59.73  # faster than the GBA plays it
+    sound = our_sound(rom, 60)
+    # up to the last frame's VBlank, as test_sound_reference counts it
+    assert len(sound) == ((160 - 126) * 1232 - (1008 - 117) + 59 * 280896) // 512
+    assert any(s != (0, 0) for s in sound[:4 * 549])  # the FIFOs played
+    assert set(sound[-30 * 549:]) == {(0, 0)}  # and the game's later write ran
 
 
 def test_soundbias_resolution_bits_keep_the_pitch():
