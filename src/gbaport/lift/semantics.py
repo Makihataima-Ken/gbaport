@@ -91,22 +91,31 @@ def restores_cpsr(ins: Instruction) -> bool:
     return ins.op is Op.LDM and ins.user and PC in ins.reglist
 
 
-def cycles(ins: Instruction) -> int:
-    """A rough cycle estimate; the scheduler only needs the right order of magnitude."""
+def in_cartridge(addr: int) -> bool:
+    """Code at ``addr`` is fetched from the cartridge (through the prefetch buffer)."""
+    return 0x08 <= addr >> 24 <= 0x0D
+
+
+def stall_pc(ins: Instruction) -> str:
+    """The pc mGBA's prefetch model sees for ``ins``, or 0 outside the cartridge."""
+    if not in_cartridge(ins.addr):
+        return "0u"
+    return hexu(ins.addr + (4 if ins.mode is Mode.THUMB else 8))
+
+
+def cycles(ins: Instruction) -> tuple[int, int, int]:
+    """mGBA's static cost of ``ins`` as (cycles, S waits, N waits) of its code's region,
+    when its condition holds; data waits, multiplies and jumps are added where they run."""
     op = ins.op
-    if op in _LOADS or op in (Op.SWP, Op.SWPB):
-        return 3
-    if op in _STORES:
-        return 2
-    if op in (Op.LDM, Op.STM):
-        return 2 + len(ins.reglist)
-    if op in (Op.MUL, Op.MLA):
-        return 4
-    if op in _LONG_MULTIPLY:
-        return 5
-    if op in (Op.B, Op.BL, Op.BX, Op.BL_LO):
-        return 3
-    return 1
+    k, s, n = 1, 1, 0  # the next instruction's sequential fetch
+    if ins.mode is Mode.THUMB and op is Op.BL and ins.size == 4:
+        k, s = 2, 2  # both halves
+    if op in _LOADS or op in _STORES or op in (Op.LDM, Op.STM, Op.SWP, Op.SWPB, Op.MUL, Op.MLA) \
+            or op in _LONG_MULTIPLY:
+        s, n = s - 1, n + 1  # the fetch after a data access or a multiply is nonsequential
+    if ins.shift is not None and ins.shift.reg is not None:
+        k += 1  # a register-specified shift takes an internal cycle
+    return k, s, n
 
 
 def _operand2(ins: Instruction, carry: bool, extra: int) -> str:
@@ -162,12 +171,13 @@ def _data_processing(ins: Instruction) -> list[str]:
 
 
 def _multiply(ins: Instruction) -> list[str]:
+    wait = f"gba_mul_wait(ctx, {read(ins, ins.rs)}, 1, {int(ins.op is Op.MLA)}, {stall_pc(ins)});"
     value = f"{read(ins, ins.rm)} * {read(ins, ins.rs)}"
     if ins.op is Op.MLA:
         value += f" + {read(ins, ins.rn)}"
     if ins.s:  # C is left alone (the ARM7TDMI leaves it meaningless), V unchanged
         value = f"gba_nz(ctx, {value})"
-    return [f"ctx->r[{ins.rd}] = {value};"]
+    return [wait, f"ctx->r[{ins.rd}] = {value};"]
 
 
 def _long_multiply(ins: Instruction) -> list[str]:
@@ -177,7 +187,8 @@ def _long_multiply(ins: Instruction) -> list[str]:
         product = f"(uint64_t)((int64_t)(int32_t){rm} * (int32_t){rs})"
     else:
         product = f"(uint64_t){rm} * {rs}"
-    body = [f"uint64_t p = {product};"]
+    body = [f"gba_mul_wait(ctx, {rs}, {int(signed)}, {1 + int(accumulate)}, {stall_pc(ins)});",
+            f"uint64_t p = {product};"]
     if accumulate:
         body.append(f"p += (uint64_t)ctx->r[{ins.rd_hi}] << 32 | ctx->r[{ins.rd}];")
     if ins.s:
@@ -213,10 +224,12 @@ def _single_transfer(ins: Instruction) -> list[str]:
         if written_back is not None:
             body.append(f"ctx->r[{ins.rn}] = {written_back};")
         body.append(f"{_STORES[ins.op]}(ctx, addr, v);")
+        body.append(f"gba_store_wait(ctx, addr, {int(ins.op is Op.STR)}, {stall_pc(ins)});")
     else:
         if written_back is not None:
             body.insert(0, f"uint32_t wb = {written_back};")
         body.append(f"uint32_t v = {_LOADS[ins.op]}(ctx, addr);")
+        body.append(f"gba_load_wait(ctx, addr, {int(ins.op is Op.LDR)}, {stall_pc(ins)});")
         if written_back is not None:
             body.append(f"ctx->r[{ins.rn}] = wb;")
         body.append(f"{dest(ins.rd)} = v;")  # a loaded base wins over the written-back one
@@ -247,6 +260,7 @@ def _block_transfer(ins: Instruction) -> list[str]:
             body.append(f"gba_write32(ctx, {slot}, {value});")
         else:
             body.append(f"{target} = gba_read32(ctx, {slot});")
+    body.append(f"gba_multiple_wait(ctx, addr, {count}u, {int(ins.op is Op.LDM)}, {stall_pc(ins)});")
     if ins.writeback:
         body.append(f"ctx->r[{ins.rn}] = final;")
     else:
@@ -261,7 +275,9 @@ def _swap(ins: Instruction) -> list[str]:
     return _scoped([
         f"uint32_t addr = {read(ins, ins.rn)};",
         f"uint32_t old = {load}(ctx, addr);",
+        f"gba_load_wait(ctx, addr, {int(ins.op is Op.SWP)}, {stall_pc(ins)});",
         f"{store}(ctx, addr, {read(ins, ins.rm)});",
+        f"gba_store_wait(ctx, addr, {int(ins.op is Op.SWP)}, {stall_pc(ins)});",
         f"ctx->r[{ins.rd}] = old;",
     ])
 

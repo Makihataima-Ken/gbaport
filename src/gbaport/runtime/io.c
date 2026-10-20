@@ -124,6 +124,7 @@ void gba_io_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16_t mask
         return;
     case GBA_REG_WAITCNT:
         IO(rt, offset) = merged & 0x7FFF;  /* bit 15 reads 0: a GBA cartridge */
+        gba_waitcnt(rt, IO(rt, offset));
         return;
     case GBA_REG_POSTFLG:  /* POSTFLG in the low byte, HALTCNT (write-only) in the high one */
         IO(rt, offset) = merged & 0x0001;

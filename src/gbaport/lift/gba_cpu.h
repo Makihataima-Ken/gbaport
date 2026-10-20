@@ -36,6 +36,12 @@ typedef struct GbaCtx {
     uint64_t cycles;            /* estimated CPU cycles run so far */
     uint64_t next_event;        /* gba_events() runs once cycles reach this */
     uint32_t call_depth;        /* gba_call chains currently running */
+    /* Timing as mGBA counts it: the wait states of a 16- or 32-bit access to each memory
+     * region (addr >> 24; N: nonsequential, S: sequential), set from WAITCNT for the
+     * cartridge, and mGBA's model of the cartridge's prefetch buffer. */
+    uint8_t n16[16], s16[16], n32[16], s32[16];
+    uint32_t prefetch;          /* WAITCNT bit 14 */
+    uint32_t prefetched;        /* how far the buffer has fetched (mGBA's lastPrefetchedPc) */
     GbaFn (*lookup)(struct GbaCtx *ctx, uint32_t addr); /* recompiled function at addr */
     void *runtime;              /* owned by the runtime */
 } GbaCtx;
@@ -86,6 +92,102 @@ static inline void gba_call_direct(GbaCtx *ctx, GbaFn fn, uint32_t ret)
     } while (0)
 
 #define GBA_CHECK_EVENTS() do { if (ctx->cycles >= ctx->next_event) gba_events(ctx); } while (0)
+
+/* ---- timing ------------------------------------------------------------------ */
+
+static inline uint32_t gba_region(uint32_t addr) { return addr >> 24 < 16 ? addr >> 24 : 0; }
+
+/* mGBA's GBAMemoryStall. Code running from the cartridge (pc: the instruction's address
+ * + 4, as the CPU sees it) with the prefetch buffer on: while a data access or an
+ * internal cycle waits, the buffer fetches the next halfwords, whose waits disappear. */
+static inline int32_t gba_stall(GbaCtx *ctx, int32_t wait, uint32_t pc)
+{
+    if (!pc || !ctx->prefetch)
+        return wait;
+    int32_t previous = 0, most = 8;
+    uint32_t dist = ctx->prefetched - pc;
+    if (dist < 16) {
+        previous = (int32_t)(dist >> 1);
+        most -= previous;
+    }
+    uint32_t r = pc >> 24;
+    int32_t s = ctx->s16[r], n2s = ctx->n16[r] - s + 1;
+    int32_t stall = s + 1, loads = 1;
+    while (stall < wait && loads < most) {
+        stall += s;
+        loads++;
+    }
+    ctx->prefetched = pc + 2u * (uint32_t)(loads + previous - 1);
+    if (stall > wait)
+        wait = stall;
+    return wait - n2s - (stall - 1);
+}
+
+/* A load (store) of 8/16 or 32 bits: the region's N wait states, the access, and for a
+ * load an internal cycle. pc is 0 for code outside the cartridge. */
+static inline void gba_load_wait(GbaCtx *ctx, uint32_t addr, int wide, uint32_t pc)
+{
+    uint32_t r = gba_region(addr);
+    int32_t wait = (wide ? ctx->n32[r] : ctx->n16[r]) + 2;
+    if (addr < 0x08000000u)
+        wait = gba_stall(ctx, wait, pc);
+    ctx->cycles += (uint64_t)(int64_t)wait;
+}
+
+static inline void gba_store_wait(GbaCtx *ctx, uint32_t addr, int wide, uint32_t pc)
+{
+    uint32_t r = gba_region(addr);
+    int32_t wait = (wide ? ctx->n32[r] : ctx->n16[r]) + 1;
+    if (addr < 0x08000000u)
+        wait = gba_stall(ctx, wait, pc);
+    ctx->cycles += (uint64_t)(int64_t)wait;
+}
+
+/* LDM/STM of count words from addr: the first nonsequential, the rest sequential. */
+static inline void gba_multiple_wait(GbaCtx *ctx, uint32_t addr, uint32_t count, int load,
+                                     uint32_t pc)
+{
+    uint32_t r = gba_region(addr);
+    int32_t wait = ctx->s32[r] - ctx->n32[r] + (int32_t)count * (1 + ctx->s32[r]) + load;
+    if (addr < 0x08000000u)
+        wait = gba_stall(ctx, wait, pc);
+    ctx->cycles += (uint64_t)(int64_t)wait;
+}
+
+/* A multiply's internal cycles, from the operand's significant bytes (mGBA's
+ * ARM_WAIT_SMUL / ARM_WAIT_UMUL), plus base (1 for MLA and the long ones, 2 when they
+ * accumulate). */
+static inline void gba_mul_wait(GbaCtx *ctx, uint32_t v, int is_signed, int32_t base, uint32_t pc)
+{
+    int32_t wait = base;
+    if (is_signed) {
+        if ((v & 0xFFFFFF00u) == 0xFFFFFF00u || !(v & 0xFFFFFF00u)) wait += 1;
+        else if ((v & 0xFFFF0000u) == 0xFFFF0000u || !(v & 0xFFFF0000u)) wait += 2;
+        else if ((v & 0xFF000000u) == 0xFF000000u || !(v & 0xFF000000u)) wait += 3;
+        else wait += 4;
+    } else {
+        if (!(v & 0xFFFFFF00u)) wait += 1;
+        else if (!(v & 0xFFFF0000u)) wait += 2;
+        else if (!(v & 0xFF000000u)) wait += 3;
+        else wait += 4;
+    }
+    ctx->cycles += (uint64_t)(int64_t)gba_stall(ctx, wait, pc);
+}
+
+/* A jump: refilling the pipeline costs 2 + N + S of the code at the target, and the
+ * prefetch buffer starts again. */
+static inline void gba_jumped(GbaCtx *ctx, uint32_t cycles)
+{
+    ctx->cycles += cycles;
+    ctx->prefetched = 0;
+}
+
+/* The refill cost of a jump to t (bit 0: Thumb). */
+static inline uint32_t gba_refill(GbaCtx *ctx, uint32_t t)
+{
+    uint32_t r = gba_region(t);
+    return t & 1u ? 2u + ctx->n16[r] + ctx->s16[r] : 2u + ctx->n32[r] + ctx->s32[r];
+}
 
 /* ---- shifter: value, and the carry-out written through *c ------------------- */
 
@@ -278,6 +380,8 @@ static inline void gba_set_cpsr(GbaCtx *ctx, uint32_t value, uint32_t fields)
     if ((fields & 1) && (ctx->cpsr_ctrl & 0x1F) != GBA_MODE_USR) {
         gba_switch_mode(ctx, value & 0x1F);
         ctx->cpsr_ctrl = (ctx->cpsr_ctrl & ~0xDFu) | (value & 0xDF);
+        if (!(value & 0x80))
+            ctx->next_event = 0;  /* a pending interrupt is taken at the next check */
     }
 }
 
@@ -297,6 +401,8 @@ static inline void gba_restore_cpsr(GbaCtx *ctx)
     ctx->z = (saved >> 30) & 1;
     ctx->c = (saved >> 29) & 1;
     ctx->v = (saved >> 28) & 1;
+    if (!(saved & 0x80))
+        ctx->next_event = 0;  /* a pending interrupt is taken at the next check */
 }
 
 /* LDM/STM with ^ and no pc: transfer the USR-mode registers from a privileged mode. */

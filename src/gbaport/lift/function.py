@@ -8,6 +8,13 @@ which state the missing code is in. A call sets LR and runs the callee chain
 with ``gba_call`` until it comes back to the return address. Blocks that loops
 or switches jump back to check for due events, so long loops still let the
 scheduler run.
+
+Time is counted as mGBA counts it (gba_cpu.h): each instruction costs the fetch of
+the next one at the wait states of the memory the code is in (set by WAITCNT),
+plus its internal cycles. Those costs are added to ``ctx->cycles`` in pieces, just
+before each memory access and before control leaves the block, so an access sees
+the time the instructions before it took, as in mGBA. Data accesses, multiplies
+and jumps add their own waits where they happen.
 """
 
 from gbaport.analysis.cfg import Function, Program
@@ -82,25 +89,54 @@ class _FunctionLifter:
     def _block(self, start: int, following: int | None, loop_head: bool) -> list[str]:
         block = self.program.blocks[start]
         lines = [f"{label(start)}:"]
-        lines.append(f"    ctx->cycles += {sum(cycles(ins) for ins in block.instructions)};")
         if loop_head:
             lines.append("    GBA_CHECK_EVENTS();")
         prev = self._predecessor(start, block.mode)
         ended = False
+        pending = (0, 0, 0)  # the cost of instructions run but not yet added to ctx->cycles
         for ins in block.instructions:
             lines.append(f"    /* {ins.addr:08x} */")
+            own = self._static(ins)
+            if _leaves(ins):  # its own cost too, before control goes elsewhere
+                pending, own = _plus(pending, own), (0, 0, 0)
+            if _leaves(ins) or _accesses(ins):
+                lines += self._charge(pending, ins)
+                pending = (0, 0, 0)
+            pending = _plus(pending, own)
             body, ended = self._instruction(ins, prev)
+            body = self._extra(ins) + body
             if ins.cond is not Cond.AL:
                 body = [f"if ({CONDITIONS[ins.cond]}) {{", *("    " + s for s in body), "}"]
                 ended = False
             lines += ["    " + s for s in body]
             prev = ins
         if not ended:
+            lines += self._charge(pending, block.instructions[-1])
             last = block.instructions[-1]
             nxt = last.addr + last.size
             if nxt != following:
                 lines.append("    " + self._go(nxt, block.mode))
         return lines
+
+    def _static(self, ins: Instruction) -> tuple[int, int, int]:
+        """The cost of ``ins`` known before it runs (see ``semantics.cycles``)."""
+        if ins.cond is not Cond.AL and ins.mode is Mode.ARM:
+            return 1, 1, 0  # the rest is added if the condition holds
+        return cycles(ins)
+
+    def _charge(self, cost: tuple[int, int, int], ins: Instruction) -> list[str]:
+        if cost == (0, 0, 0):
+            return []
+        return [f"    ctx->cycles += {_cost_expr(*cost, ins.addr, ins.mode)};"]
+
+    def _extra(self, ins: Instruction) -> list[str]:
+        """What a conditional ARM instruction costs beyond its fetch, when it runs."""
+        if ins.cond is Cond.AL or ins.mode is not Mode.ARM:
+            return []
+        k, s, n = cycles(ins)
+        if (k, s, n) == (1, 1, 0):
+            return []
+        return [f"ctx->cycles += {_cost_expr(k - 1, s - 1, n, ins.addr, ins.mode)};"]
 
     def _predecessor(self, start: int, mode: Mode) -> Instruction | None:
         before = self.ex.instructions.get(start - (4 if mode is Mode.ARM else 2))
@@ -115,20 +151,23 @@ class _FunctionLifter:
             return [f"gba_undefined(ctx, {hexu(ins.addr)});", f"GBA_EXIT({hexu(ins.addr)});"], True
         after = ins.addr + ins.size
         if op is Op.B:
-            if ins.target == after:  # a branch to the next instruction does nothing
-                return [], False
-            return [self._go(ins.target, ins.mode)], True
+            refill = f"gba_jumped(ctx, {_refill_expr(ins.target, ins.mode)});"
+            if ins.target == after:  # a branch to the next instruction only refills
+                return [refill], False
+            return [refill, self._go(ins.target, ins.mode)], True
         if op is Op.BL:
             ret = self._return_address(ins)
             set_lr = f"ctx->r[14] = {hexu(ret)};"
+            refill = f"gba_jumped(ctx, {_refill_expr(ins.target, ins.mode)});"
             if ins.target == after:  # only sets LR (a weak call, or reading the pc)
-                return [set_lr], False
-            return [set_lr, self._call(ins.target, ret, ins.mode)], False
+                return [set_lr, refill], False
+            return [set_lr, refill, self._call(ins.target, ret, ins.mode)], False
         if op is Op.BL_LO:
             ret = self._return_address(ins)
             return [
                 f"t = (ctx->r[14] + {hexu(ins.imm)}) | 1u;",  # stays in Thumb state
                 f"ctx->r[14] = {hexu(ret)};",
+                "gba_jumped(ctx, gba_refill(ctx, t));",
                 f"gba_call(ctx, t, {hexu(ret)});",
             ], False
         try:
@@ -138,7 +177,7 @@ class _FunctionLifter:
             return [f"gba_undefined(ctx, {hexu(ins.addr)});", f"GBA_EXIT({hexu(ins.addr)});"], True
         if not writes_pc(ins):
             return effects, False
-        body = effects + self._mask(ins)
+        body = effects + self._mask(ins) + ["gba_jumped(ctx, gba_refill(ctx, t));"]
         if links_to_next(prev):  # mov lr, pc just before: a call through a register
             return body + ["gba_call(ctx, t, ctx->r[14]);"], False
         return body + self._switch(ins) + ["GBA_EXIT(t);"], True
@@ -178,6 +217,38 @@ class _FunctionLifter:
         lines += [f"case {hexu(s)}: goto {label(s)};" for s in sorted(set(cases))]
         lines += ["default: break;", "}"]
         return lines
+
+
+def _plus(a: tuple[int, int, int], b: tuple[int, int, int]) -> tuple[int, int, int]:
+    return a[0] + b[0], a[1] + b[1], a[2] + b[2]
+
+
+def _leaves(ins: Instruction) -> bool:
+    """Control may go elsewhere after ``ins``: a branch, call or write to pc."""
+    return ins.op in (Op.B, Op.BL, Op.BL_LO) or writes_pc(ins)
+
+
+def _accesses(ins: Instruction) -> bool:
+    """``ins`` reads or writes memory, or calls the BIOS: it may see the time."""
+    return ins.op in (Op.LDR, Op.LDRB, Op.LDRH, Op.LDRSB, Op.LDRSH, Op.STR, Op.STRB, Op.STRH,
+                      Op.LDM, Op.STM, Op.SWP, Op.SWPB, Op.SWI)
+
+
+def _cost_expr(k: int, s: int, n: int, addr: int, mode: Mode) -> str:
+    """C for k cycles plus s sequential and n nonsequential fetches of code at ``addr``."""
+    width = "16" if mode is Mode.THUMB else "32"
+    region = addr >> 24 if addr >> 24 < 16 else 0  # as gba_region()
+    terms = [f"{k}u"]
+    if s:
+        terms.append(f"{s} * ctx->s{width}[{region}]")
+    if n:
+        terms.append(f"{n} * ctx->n{width}[{region}]")
+    return " + ".join(terms)
+
+
+def _refill_expr(target: int, mode: Mode) -> str:
+    """Refilling the pipeline at a constant target: 2 + N + S of its code."""
+    return _cost_expr(2, 1, 1, target, mode)
 
 
 def _in_state(target: int, mode: Mode) -> int:

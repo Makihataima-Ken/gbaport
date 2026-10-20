@@ -127,15 +127,14 @@ int main(void)
     spin(10);
     expect("ie on: pending interrupt delivered", irq_count[0], before + 1);
 
-    /* The CPSR's I bit masks interrupts; clearing it with MSR lets them in again (taken at
-     * the next scheduler event, so within a scanline). */
+    /* The CPSR's I bit masks interrupts; clearing it with MSR lets a pending one in at once. */
     set_cpsr_control(0x9F);
     before = irq_count[0];
     wait_vcount(10);
     wait_vcount(161);
     expect("cpsr I set: no interrupt", irq_count[0], before);
     set_cpsr_control(0x1F);
-    wait_vcount(163);
+    spin(10);
     expect("cpsr I clear: pending interrupt delivered", irq_count[0], before + 1);
 
     /* Halt sleeps until the next enabled request. */

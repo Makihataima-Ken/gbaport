@@ -223,6 +223,7 @@ int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *h
 GbaEnd gba_run(GbaRuntime *rt);
 void gba_end(GbaRuntime *rt, GbaEnd why);  /* from a callback: ends gba_run */
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed);  /* GBA key bits, 1 = pressed */
+void gba_waitcnt(GbaRuntime *rt, uint16_t value);  /* the wait states WAITCNT sets */
 void gba_screen(const GbaRuntime *rt, uint32_t *pixels);  /* 240x160, 0x00RRGGBB */
 /* Moves up to `max` samples made so far (left, right pairs, 32768 a second) to `out`,
  * oldest first; returns how many. */

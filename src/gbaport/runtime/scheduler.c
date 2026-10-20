@@ -146,7 +146,12 @@ static void deliver(GbaRuntime *rt)
     ctx->r[13] = sp;
     ctx->r[0] = 0x04000000u;
     ctx->r[14] = BIOS_IRQ_RETURN;
-    ctx->cycles += 40;  /* the BIOS's IRQ entry and exit */
+    /* The BIOS's IRQ entry and exit as mGBA counts them (its stand-in BIOS's code): the
+     * jump to 0x18 (2), stmfd of 6 registers (7), mov and add (2), ldr pc (5), ldmfd (8) and
+     * subs pc (1), whose jump back is taken to be to Thumb code in the cartridge (2 + N + S);
+     * the handler's own return to the BIOS is the recompiled code's. */
+    ctx->cycles += 25 + 2 + ctx->n16[8] + ctx->s16[8];
+    ctx->prefetched = 0;
     rt->bios_bus = 0xE25EF004u;  /* the opcode at 0x13C, fetched while the handler runs */
     gba_call(ctx, handler, BIOS_IRQ_RETURN);
     sp = ctx->r[13];

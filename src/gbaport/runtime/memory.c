@@ -78,6 +78,41 @@ static void debug_write16(GbaRuntime *rt, uint32_t addr, uint32_t value)
     }
 }
 
+/* ---- wait states ------------------------------------------------------------------ */
+
+/* The wait states of a 16- and 32-bit access to each region, nonsequential (N) and
+ * sequential (S), as mGBA keeps them: fixed for the BIOS, RAM, I/O and video memory (EWRAM
+ * 2 a halfword, palette and VRAM 1 more for a word), and set by WAITCNT for the
+ * cartridge's three windows (N 4, 3, 2 or 8; S 2 or 1, 4 or 1, 8 or 1) and SRAM; a word
+ * from the cartridge is two halfwords. Bit 14 turns the prefetch buffer on. */
+void gba_waitcnt(GbaRuntime *rt, uint16_t value)
+{
+    static const uint8_t N16[16] = {0, 0, 2, 0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 0};
+    static const uint8_t N32[16] = {0, 0, 5, 0, 0, 1, 1, 0, 7, 7, 9, 9, 13, 13, 9, 0};
+    static const uint8_t S16[16] = {0, 0, 2, 0, 0, 0, 0, 0, 2, 2, 4, 4, 8, 8, 4, 0};
+    static const uint8_t S32[16] = {0, 0, 5, 0, 0, 1, 1, 0, 5, 5, 9, 9, 17, 17, 9, 0};
+    static const uint8_t ROM_N[4] = {4, 3, 2, 8};
+    static const uint8_t ROM_S[6] = {2, 1, 4, 1, 8, 1};
+    GbaCtx *ctx = &rt->cpu;
+    for (int r = 0; r < 16; r++) {
+        ctx->n16[r] = N16[r], ctx->n32[r] = N32[r], ctx->s16[r] = S16[r], ctx->s32[r] = S32[r];
+    }
+    uint8_t sram = ROM_N[value & 3];
+    for (int r = 14; r < 16; r++) {
+        ctx->n16[r] = ctx->s16[r] = sram;
+        ctx->n32[r] = ctx->s32[r] = (uint8_t)(2 * sram + 1);
+    }
+    for (int ws = 0; ws < 3; ws++) {
+        uint8_t n = ROM_N[(value >> (2 + 3 * ws)) & 3];
+        uint8_t s = ROM_S[2 * ws + ((value >> (4 + 3 * ws)) & 1)];
+        for (int r = 8 + 2 * ws; r < 10 + 2 * ws; r++) {
+            ctx->n16[r] = n, ctx->s16[r] = s;
+            ctx->n32[r] = (uint8_t)(n + 1 + s), ctx->s32[r] = (uint8_t)(2 * s + 1);
+        }
+    }
+    ctx->prefetch = (value >> 14) & 1;
+}
+
 /* ---- reads ------------------------------------------------------------------------ */
 
 uint32_t gba_read16(GbaCtx *ctx, uint32_t addr)
