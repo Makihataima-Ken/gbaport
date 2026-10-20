@@ -1,8 +1,8 @@
-# Builds mGBA's GBA core and mgbaref.c, the renderer tests' reference (tests/mgbaref.py
-# runs this). The source release is GBAPORT_MGBA_URL (mgbaref.py downloads it first) and
-# must match GBAPORT_MGBA_SHA256; mgbaref.py writes salt.c into the build folder.
+# Builds mGBA's GBA core and mgba.c, gbaport's reference (gbaport/native/mgba.py runs
+# this). The source release is GBAPORT_MGBA_URL (mgba.py downloads it first) and must match
+# GBAPORT_MGBA_SHA256; mgba.py writes salt.c into the build folder.
 cmake_minimum_required(VERSION 3.28)
-project(gbaport_mgbaref LANGUAGES C)
+project(gbaport_mgba LANGUAGES C)
 
 include(FetchContent)
 string(APPEND CMAKE_C_FLAGS " -Wno-incompatible-pointer-types -Wno-int-conversion")  # clang 23
@@ -22,7 +22,7 @@ if(WIN32)  # mGBA links the maths library "m"; on Windows the C runtime has thos
     add_library(m INTERFACE)
 endif()
 
-add_executable(mgbaref mgbaref.c "${CMAKE_BINARY_DIR}/salt.c")
-target_include_directories(mgbaref PRIVATE "${mgba_SOURCE_DIR}/include" "${mgba_BINARY_DIR}/include")
-target_compile_definitions(mgbaref PRIVATE BUILD_STATIC M_CORE_GBA)
-target_link_libraries(mgbaref PRIVATE mgba)
+add_executable(gbaport-mgba mgba.c "${CMAKE_BINARY_DIR}/salt.c")
+target_include_directories(gbaport-mgba PRIVATE "${mgba_SOURCE_DIR}/include" "${mgba_BINARY_DIR}/include")
+target_compile_definitions(gbaport-mgba PRIVATE BUILD_STATIC M_CORE_GBA)
+target_link_libraries(gbaport-mgba PRIVATE mgba)
