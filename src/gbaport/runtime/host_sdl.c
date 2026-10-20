@@ -1,7 +1,8 @@
 /* host_sdl.c - run a recompiled game in a window (SDL3).
  *
- *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--registers]
- *              [--screenshot PATH] [--audio PATH] [--scale N] [--fast]
+ *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--input FILE]
+ *              [--registers] [--screenshot PATH] [--audio PATH] [--hashes PATH]
+ *              [--scale N] [--fast]
  *
  * Keyboard: arrows, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select. A
  * gamepad works too: its right face button is A, the bottom one B. The game runs at the

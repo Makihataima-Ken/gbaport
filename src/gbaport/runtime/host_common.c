@@ -5,8 +5,11 @@
  * PATH the sound goes to a WAV file too (16-bit stereo, 32768 samples a second). Scripted key
  * presses (--press FRAME:KEYS) let tests and recordings drive the game: KEYS are names
  * joined with '+' (A, B, SELECT, START, RIGHT, LEFT, UP, DOWN, R, L) or "none", held from
- * the FRAME-th VBlank on. While the game is stopped, time does not pass, so the next
- * scripted press comes at once. */
+ * the FRAME-th VBlank on. An input file (--input FILE, gbaport/inputs.py) holds any number
+ * of them, a "FRAME KEYS" line each. While the game is stopped, time does not pass, so the
+ * next scripted press comes at once. With --hashes PATH each frame's picture hash goes to
+ * a text file, a line a frame, the same gbaport-mgba writes (`gbaport verify` compares
+ * them). */
 #define _CRT_SECURE_NO_WARNINGS
 #include "host_common.h"
 
@@ -181,12 +184,13 @@ static void default_save_path(HostOptions *o)
         snprintf(path, size, "%s.sav", o->rom_path);
 }
 
-/* "FRAME:KEYS" into a press; returns 0, or -1 when it is not one. */
-static int parse_press(const char *text, HostPress *press)
+/* "FRAME:KEYS" (separator ':') or "FRAME KEYS" (' ') into a press; returns 0, or -1 when
+ * it is not one. */
+static int parse_press(const char *text, char separator, HostPress *press)
 {
     char *end;
     press->frame = strtoul(text, &end, 10);
-    if (end == text || *end != ':')
+    if (end == text || *end != separator || *text == '-')
         return -1;
     press->keys = 0;
     const char *name = end + 1;
@@ -208,6 +212,54 @@ static int parse_press(const char *text, HostPress *press)
     return press->keys ? 0 : -1;
 }
 
+/* Adds a press after the others; -1 when it comes before the last one. */
+static int add_press(HostOptions *o, HostPress press)
+{
+    if (o->press_count && press.frame < o->presses[o->press_count - 1].frame)
+        return -1;
+    if (o->press_count == o->press_capacity) {
+        o->press_capacity = o->press_capacity ? 2 * o->press_capacity : 64;
+        o->presses = realloc(o->presses, (size_t)o->press_capacity * sizeof *o->presses);
+    }
+    o->presses[o->press_count++] = press;
+    return 0;
+}
+
+/* The presses of an input file; returns 0, or -1 after printing what is wrong. */
+static int load_input(HostOptions *o, const char *path)
+{
+    FILE *f = open_file(path, "rb");
+    if (!f) {
+        fprintf(stderr, "error: cannot read %s\n", path);
+        return -1;
+    }
+    char line[256];
+    int ok = 1;
+    for (int number = 1; ok && fgets(line, sizeof line, f); number++) {
+        if (number == 1 && strncmp(line, "\xEF\xBB\xBF", 3) == 0)
+            memmove(line, line + 3, strlen(line + 3) + 1);  /* a UTF-8 byte order mark */
+        line[strcspn(line, "#\r\n")] = 0;
+        char *start = line + strspn(line, " \t"), *stop = start + strlen(start);
+        while (stop > start && (stop[-1] == ' ' || stop[-1] == '\t'))
+            *--stop = 0;
+        if (!*start)
+            continue;  /* a blank line or a comment */
+        char *gap = start + strcspn(start, " \t");
+        if (*gap) {  /* "FRAME   KEYS": one separator */
+            char *keys = gap + strspn(gap, " \t");
+            memmove(gap + 1, keys, strlen(keys) + 1);
+            *gap = ' ';
+        }
+        HostPress press;
+        ok = parse_press(start, ' ', &press) == 0 && add_press(o, press) == 0;
+        if (!ok)
+            fprintf(stderr, "error: %s, line %d: expected 'FRAME KEYS', frames in order\n",
+                    path, number);
+    }
+    fclose(f);
+    return ok ? 0 : -1;
+}
+
 int host_parse(HostOptions *o, int argc, char **argv)
 {
     int bad = 0;
@@ -224,12 +276,16 @@ int host_parse(HostOptions *o, int argc, char **argv)
             snprintf(o->save_path, sizeof o->save_path, "%s", value);
             i++;
         } else if (strcmp(arg, "--press") == 0 && value) {
-            HostPress *press = &o->presses[o->press_count];
-            if (o->press_count == HOST_MAX_PRESSES || parse_press(value, press) != 0 ||
-                (o->press_count && press->frame < press[-1].frame))
+            HostPress press;
+            if (parse_press(value, ':', &press) != 0 || add_press(o, press) != 0)
                 bad = 1;
-            else
-                o->press_count++;
+            i++;
+        } else if (strcmp(arg, "--input") == 0 && value) {
+            if (load_input(o, value) != 0)
+                return 2;
+            i++;
+        } else if (strcmp(arg, "--hashes") == 0 && value) {
+            o->hashes = value;
             i++;
         } else if (strcmp(arg, "--screenshot") == 0 && value) {
             o->screenshot = value;
@@ -254,7 +310,8 @@ int host_parse(HostOptions *o, int argc, char **argv)
     if (!o->rom_path || bad) {
         fprintf(stderr,
                 "usage: %s ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... "
-                "[--registers] [--screenshot PATH] [--audio PATH]%s\n",
+                "[--input FILE] [--registers] [--screenshot PATH] [--audio PATH] "
+                "[--hashes PATH]%s\n",
                 argv[0], o->window ? " [--scale N] [--fast]" : "");
         return 2;
     }
@@ -296,16 +353,37 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
         }
         o->audio_file = f;
     }
+    if (o->hashes) {
+        o->hashes_file = open_file(o->hashes, "wb");
+        if (!o->hashes_file) {
+            fprintf(stderr, "error: cannot write %s\n", o->hashes);
+            return 2;
+        }
+    }
     while (o->next_press < o->press_count && o->presses[o->next_press].frame == 0)
         o->script_keys = o->presses[o->next_press++].keys;
     gba_set_keys(rt, o->script_keys);
     return 0;
 }
 
+uint64_t host_picture_hash(const GbaRuntime *rt)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (int y = 0; y < GBA_SCREEN_HEIGHT; y++)
+        for (int x = 0; x < GBA_SCREEN_WIDTH; x++) {
+            uint16_t colour = rt->screen[y][x];
+            h = (h ^ (colour & 0xFF)) * 0x100000001B3ull;
+            h = (h ^ ((colour >> 8) & 0x7F)) * 0x100000001B3ull;
+        }
+    return h;
+}
+
 void host_frame(HostOptions *o, GbaRuntime *rt)
 {
     o->sound_count = gba_audio_take(rt, o->sound, GBA_SOUND_BUFFER);
     write_sound(o);
+    if (o->hashes_file)
+        fprintf(o->hashes_file, "%016llx\n", (unsigned long long)host_picture_hash(rt));
     while (o->next_press < o->press_count && o->presses[o->next_press].frame <= rt->frames)
         o->script_keys = o->presses[o->next_press++].keys;
     if (rt->frames % 60 == 0)
@@ -336,6 +414,9 @@ int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
             fprintf(stderr, "warning: cannot finish the sound file %s\n", o->audio);
         o->audio_file = NULL;
     }
+    if (o->hashes_file && fclose(o->hashes_file) != 0)
+        fprintf(stderr, "warning: cannot finish %s\n", o->hashes);
+    o->hashes_file = NULL;
     if (o->registers) {
         GbaCtx *ctx = &rt->cpu;
         fprintf(stderr, "registers");
