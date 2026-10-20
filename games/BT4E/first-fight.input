@@ -1,0 +1,88 @@
+# Dragon Ball GT Transformation (BT4E): from power-on into its first fight.
+# Frames count from power-on, 60 a second; each line holds its keys from that frame on
+# (gbaport/inputs.py). Played by `gbaport trace` and `gbaport verify` (README).
+
+900 A          # past the title screen
+906 none
+1100 A         # the menu's first choice
+1106 none
+
+# the opening's scenes, skipped one at a time
+1700 START
+1706 none
+1760 START
+1766 none
+1820 START
+1826 none
+1880 START
+1886 none
+1940 START
+1946 none
+2000 START
+2006 none
+2060 START
+2066 none
+2120 START
+2126 none
+2180 START
+2186 none
+2240 START
+2246 none
+2300 START
+2306 none
+2360 START
+2366 none
+
+2500 A         # the first stage's choice
+2506 none
+
+# the scenes before the fight
+3300 START
+3306 none
+3360 START
+3366 none
+3420 START
+3426 none
+
+# the fight: RIGHT, A ten times, LEFT, then B, A with RIGHT, and B again
+3500 RIGHT
+3600 none
+3620 A
+3625 none
+3640 A
+3645 none
+3660 A
+3665 none
+3680 A
+3685 none
+3700 A
+3705 none
+3720 A
+3725 none
+3740 A
+3745 none
+3760 A
+3765 none
+3780 A
+3785 none
+3800 A
+3805 none
+3820 LEFT
+3880 B
+3886 none
+3900 A+RIGHT
+3960 none
+3980 B
+3985 none
+4010 B
+4015 none
+4040 B
+4045 none
+4070 B
+4075 none
+4100 B
+4105 none
+4130 B
+4135 none
+4160 B
+4165 none

@@ -105,7 +105,9 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
   entered with, also handles code that sets LR itself before jumping (`ldr lr, =main; b init`).
   Calls that never come back (`bl` used as a jump inside a loop) would nest C calls without
   end, so nesting deeper than `GBA_MAX_CALL_DEPTH` (1024) aborts through the runtime's
-  `gba_call_overflow` with the return address.
+  `gba_call_overflow` with the return address. Each running call keeps its return address:
+  code that goes to the return address of a call further out (a task switch) ends the
+  calls in between too (Plan 7b).
 - **Memory.** Region page table (`addr >> 24`) with fast paths for EWRAM, IWRAM, VRAM, OAM,
   palette and ROM; I/O-register writes call handlers (DMA start, timer reload, IRQ ack).
 - **Timing.** Counted as mGBA counts it (Plan 7a): each instruction adds its fetches at
@@ -154,7 +156,8 @@ mode = "arm"
 model = "block"                # "block" (default) or "frame"
 ```
 
-Traces recorded with `gbaport trace` live next to it in `games/<game_code>/traces/*.trace`
+Traces recorded with `gbaport trace` (gbaport's mGBA playing an input file, or mGBA's
+GDB server while someone plays) live next to it in `games/<game_code>/traces/*.trace`
 (addresses only) and are read automatically. Code the game copies into RAM with DMA or
 CpuSet is detected and needs a `[[ram_code]]` entry only when detection misses it.
 
@@ -210,8 +213,8 @@ Needed later:
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
 - mGBA 0.10 or newer with its GDB server, dev machine only (`gbaport trace`) — Plan 2b.
 - mGBA 0.10.5's GBA core, built from source by gbaport (16-bit colour, no dependencies)
-  as the renderer's reference (Plan 5), the sound's (Plan 6), and the timing's and
-  `gbaport verify`'s (Plan 7a).
+  as the renderer's reference (Plan 5), the sound's (Plan 6), the timing's and
+  `gbaport verify`'s (Plan 7a), and `gbaport trace --frames`'s (Plan 7b).
 
 ## Risks
 

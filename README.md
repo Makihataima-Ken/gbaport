@@ -41,6 +41,7 @@ names the files.
     uv run gbaport info roms/mygame.gba [--json]
     uv run gbaport disasm roms/mygame.gba --start 0x080000c0 --count 40 [--thumb]
     uv run gbaport analyze roms/mygame.gba [--config games/XXXX/game.toml] [--out build/analysis.json]
+    uv run gbaport trace roms/mygame.gba --frames 4200 [--input FILE]
     uv run gbaport trace roms/mygame.gba [--port 2345] [--seconds 600]
     uv run gbaport recompile roms/mygame.gba [--out games/XXXX/generated]
     uv run gbaport build roms/mygame.gba [--config games/XXXX/game.toml] [--out games/XXXX]
@@ -113,7 +114,14 @@ The most common runtime error is code the recompiler did not find:
 Add the address to `games/<game_code>/game.toml` (`thumb_entries` or `entries`, as the
 message says) and build again, or record a trace with mGBA (below).
 `games/BT4E/game.toml` is an example: the entries Dragon Ball GT Transformation needs to
-boot and play its first minute.
+boot and play its first minute. With `games/BT4E/traces/mgba.trace`, recorded from
+`games/BT4E/first-fight.input`, it plays on into its first fight.
+
+Some games switch between tasks, each on its own stack: a task "returns" into another one,
+where that one last switched away, past the calls the first task made since. The runtime
+keeps each running call's return address, so when code goes to the return address of a
+call further out, the recompiled functions in between return too, and the calls are as
+deep as before.
 
 The game's time is counted as mGBA counts it: each instruction costs its fetches at the
 wait states WAITCNT sets for the memory it runs from, data accesses cost their memory's
@@ -145,11 +153,38 @@ An input file holds the keys, a line each time they change, held from that frame
 
 The headless and window programs play one with `--input FILE`.
 
+`games/BT4E/first-fight.input` plays Dragon Ball GT Transformation from power-on into its
+first fight. Through the menus and the fight's first seconds, the pictures stay within a
+frame of mGBA's:
+
+    uv run gbaport verify roms/mygame.gba --frames 3600 --input games/BT4E/first-fight.input
+    verified 3600 frames: 1211 pictures in the same order, at most 1 frame apart
+
+Further on they part, at frame 3627: where the native build has come a frame early, a press
+reaches the game a frame later in its own time, so the fighter it moves is one step behind
+the rest of the picture; by frame 3837 the fight goes its own way.
+
 ## Recording traces with mGBA
 
 Static analysis cannot see every function pointer. `gbaport trace` watches the game
-running in mGBA (0.10 or newer, dev machine only) and records where its indirect calls
-and jumps go:
+running in mGBA and records where its indirect calls and jumps go, into
+`games/<game_code>/traces/mgba.trace` (addresses only, safe to commit), which every
+command reads. Each run adds to the file.
+
+With `--frames N`, gbaport's own mGBA plays the game from power-on, holding the keys an
+input file names (`--input`):
+
+    uv run gbaport trace roms/mygame.gba --frames 4200 --input games/BT4E/first-fight.input
+    played 4200 frames in mGBA: 914 indirect transfers, 729 new hits
+
+It runs the game an instruction at a time and follows its calls on a stack of its own, so
+it leaves out returns to the latest call and to calls further out (the runtime unwinds
+those, above), and keeps every other jump through a register. A call through a shared
+`bx rN` veneer is recorded at the `bl` that called the veneer, so each call site gets its
+own targets.
+
+Without `--frames`, it records what you play in mGBA's window (0.10 or newer, dev machine
+only), through mGBA's GDB server:
 
 1. Open the ROM in mGBA, then choose Tools > Start GDB server (port 2345).
 2. Run `uv run gbaport trace roms/mygame.gba` and play: menus, levels, cutscenes.
