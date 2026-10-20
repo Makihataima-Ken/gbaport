@@ -439,9 +439,12 @@ class _Explorer:
         elif kind is FlowKind.INDIRECT:
             here = self._indirect(ins, history)
         elif kind is FlowKind.RETURN:
-            hits = self.traced.get(ins.addr, ())
-            if hits:  # a return that went somewhere other than a caller: entries there
-                self._traced_jump(ins, hits, switch=False)
+            # A return that went where no call in progress came from (a task switch):
+            # entries there. The site is not listed as traced: the GDB recorder, which
+            # follows no calls, would record its returns to calls further out too, and
+            # those, made entries, would keep the runtime from unwinding.
+            for target, mode in self.traced.get(ins.addr, ()):
+                self.add_entry(target, mode, "trace", origin=ins.addr)
             here = ()
         else:  # STOP
             if ins.op is Op.UNDEFINED:

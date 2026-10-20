@@ -9,6 +9,7 @@ from gbaport.analysis.traces import Hit, load_trace
 from gbaport.cli import main
 from gbaport.isa.model import Mode
 from gbaport.rom.image import RomImage
+from gbaport.tracing.session import breakpoint_sites
 
 
 def traced(name: str, tmp_path, *args: str):
@@ -88,3 +89,12 @@ def test_returns_the_trace_saw_going_elsewhere_lead_discovery_there(tmp_path):
     rom, trace = traced("tasks", tmp_path)
     ex = analyze_rom(RomImage(rom.data), parse_config(rom.config), (trace,)).exploration
     assert {rom.symbols["yield_b_resumes"], rom.symbols["task_b_resumes"]} <= set(ex.entries)
+
+
+def test_the_gdb_recorder_leaves_traced_returns_alone(tmp_path):
+    """It has no call stack: at a return it would also record the returns to calls further
+    out, and those, made entries, would keep the runtime from unwinding."""
+    rom, trace = traced("tasks", tmp_path)
+    ex = analyze_rom(RomImage(rom.data), parse_config(rom.config), (trace,)).exploration
+    returns = {(rom.symbols["switch_task"] & ~1) + 8, rom.symbols["yield_b_resumes"]}  # the pops
+    assert not returns & {site.addr for site in breakpoint_sites(ex)}

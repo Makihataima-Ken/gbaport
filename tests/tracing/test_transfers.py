@@ -5,6 +5,7 @@ import pytest
 from romtest import build_test_rom
 
 from gbaport.isa.model import Mode
+from gbaport.native import mgba as mgba_module
 from gbaport.native.mgba import run_mgba
 from gbaport.tracing.transfers import Transfer, TransferError, load_transfers, parse_transfers
 
@@ -69,3 +70,18 @@ def test_mgba_writes_the_transfers_to_any_file_name(tmp_path):
     folder.mkdir()
     symbols, transfers = transfers_of("calls", folder)
     assert symbols["hidden_thumb"] in {t.target for t in transfers}
+
+
+def test_a_traced_run_plays_the_frames_an_untraced_one_does(tmp_path, monkeypatch):
+    """A game halted until a key wakes it (no VBlank interrupt ends the halt at a frame's
+    end): the frames end as in mGBA's own frame loop, so the keys come on time."""
+    monkeypatch.setattr(mgba_module, "MGBA_TIMEOUT", 60)
+    rom = tmp_path / "game.gba"
+    rom.write_bytes(build_test_rom("keypad_halt").data)
+    (tmp_path / "game.input").write_text("5 A\n10 none\n", encoding="utf-8")
+    for name, trace in (("plain", None), ("traced", tmp_path / "game.transfers")):
+        run_mgba(rom, 30, input=tmp_path / "game.input", hashes=tmp_path / f"{name}.hashes",
+                 trace=trace)
+    plain = (tmp_path / "plain.hashes").read_text(encoding="utf-8")
+    assert len(set(plain.split())) > 15  # awake from frame 5: a new picture each frame
+    assert (tmp_path / "traced.hashes").read_text(encoding="utf-8") == plain

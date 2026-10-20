@@ -241,15 +241,22 @@ static int depth;
 /* One frame, an instruction at a time. A transfer that leaves LR pointing just after it is
  * a call (BL, or BX after MOV LR, PC). An indirect transfer to the latest call's return
  * address is an ordinary return; to an outer call's, a return past the calls in between
- * (the runtime unwinds those); anything else is recorded. The BIOS is left out. */
+ * (the runtime unwinds those); anything else is recorded. The BIOS is left out. The frame
+ * ends as in mGBA's runFrame: events are run whenever they are due, and the frame is looked
+ * at again after them (a halted CPU skips ahead to the end of the frame, and stays halted
+ * until the keys of the next frame are set). */
 static void run_frame_traced(struct mCore *core)
 {
     struct GBA *gba = core->board;
     struct ARMCore *cpu = core->cpu;
     uint32_t frame = gba->video.frameCounter;
-    while (gba->video.frameCounter == frame) {
-        while (cpu->cycles >= cpu->nextEvent)
+    uint32_t start = mTimingCurrentTime(&gba->timing);
+    uint32_t most = VIDEO_TOTAL_LENGTH + VIDEO_HORIZONTAL_LENGTH;  /* runFrame's bound too */
+    while (gba->video.frameCounter == frame && mTimingCurrentTime(&gba->timing) - start < most) {
+        if (cpu->cycles >= cpu->nextEvent) {
             cpu->irqh.processEvents(cpu);
+            continue;
+        }
         int thumb = cpu->executionMode == MODE_THUMB;
         uint32_t width = thumb ? 2 : 4, site = cpu->gprs[ARM_PC] - width;
         uint32_t opcode = cpu->prefetch[0], lr = cpu->gprs[ARM_LR];
