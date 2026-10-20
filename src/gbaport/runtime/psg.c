@@ -1,8 +1,11 @@
 /* psg.c - the GBA's four Game Boy sound channels (the PSG) and their frame sequencer.
  *
  * Channels 1 and 2 play square waves: 8 steps a period, high for 1, 2, 4 or 6 of them
- * (the duty), each step 16 (2048 - frequency) cycles long. Every channel's level is 0-15,
- * the envelope's volume when the wave is high. The frame sequencer steps every 32768 cycles
+ * (the duty), each step 16 (2048 - frequency) cycles long. Channel 3 plays the 4-bit
+ * samples in wave RAM: one bank of 32 (SOUND3CNT_L bit 6 chooses which; the game writes
+ * the other) or both, 64, one every 8 (2048 - rate) cycles, at 0%, 25%, 50%, 75% or 100%.
+ * Every channel's level is 0-15 (squares: the
+ * envelope's volume when the wave is high). The frame sequencer steps every 32768 cycles
  * from the game's start (512 times a second); its steps 0, 2, 4 and 6 count lengths down
  * (a channel with "stop" set ends when its length runs out), steps 2 and 6 move channel
  * 1's sweep, and step 7 moves the envelopes.
@@ -16,7 +19,10 @@
  * channel that stops keeps its last level; a square's wave keeps stepping from where it
  * was, in step with the game's start, while it plays or its registers are written; an
  * envelope that reaches 0 (or 15) stops moving; writing "stop" in the half of a frame
- * sequencer step that does not count lengths counts one more. */
+ * sequencer step that does not count lengths counts one more. The wave channel turns the
+ * playing bank's samples round as it plays them (so wave RAM reads back turned); its first
+ * sample comes 24 + 8 (2048 - rate) cycles after a restart; and its volume is applied
+ * again whenever it is brought up to time, even without a new sample (as in mGBA). */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -163,6 +169,54 @@ static void square_control(GbaPsg *p, int n, uint8_t value)
     }
 }
 
+/* ---- the wave channel ---- */
+
+static const int WAVE_SHIFT[8] = {4, 0, 1, 2, 2, 2, 2, 2};  /* by SOUND3CNT_H bits 13-15 */
+
+/* Brings the wave up to time t: each step turns the playing samples by one, and the one
+ * that comes out plays. */
+static void wave_run(GbaWave *w, int64_t t)
+{
+    if (!w->playing)
+        return;
+    int64_t cycles = 8 * (2048 - w->rate), diff = t - w->next_update;
+    if (diff < 0)
+        return;
+    int64_t steps = diff / cycles + 1;
+    int first = 7, last = 0, mask = 0x1F;  /* the words turned: both banks, 4-7 or 0-3 */
+    if (w->size)
+        mask = 0x3F;
+    else if (w->bank)
+        last = 4;
+    else
+        first = 3;
+    for (int64_t i = 0; i < (steps & mask); i++) {
+        uint32_t carry = w->ram[last] & 0xF0;
+        for (int k = first; k >= last; k--) {
+            uint32_t bits = w->ram[k] & 0xF0;
+            w->ram[k] = ((w->ram[k] & 0x0F0F0F0F) << 4) | ((w->ram[k] & 0xF0F0F000) >> 12) | carry << 20;
+            carry = bits;
+        }
+        w->sample = (int)(carry >> 4);
+    }
+    if (w->volume > 3)
+        w->sample += w->sample << 1;  /* 75%: three quarters */
+    w->sample >>= WAVE_SHIFT[w->volume];
+    w->next_update += steps * cycles;
+}
+
+/* NR34: rate bits 8-10, stop, restart. */
+static void wave_control(GbaPsg *p, int64_t t, uint8_t value)
+{
+    GbaWave *w = &p->wave;
+    w->rate = (w->rate & 0xFF) | (value & 7) << 8;
+    length_control(&w->length, &w->stop, &w->playing, value, 256, p->frame);
+    if (value & 0x80)
+        w->playing = w->enable;
+    if (w->playing)
+        w->next_update = t + 24 + 8 * (2048 - w->rate);
+}
+
 /* ---- the PSG ---- */
 
 void gba_psg_run(GbaPsg *p, int64_t t, int channels)
@@ -172,6 +226,8 @@ void gba_psg_run(GbaPsg *p, int64_t t, int channels)
     for (int n = 0; n < 2; n++)
         if (channels & (1 << n))
             square_run(&p->square[n], t, channels == 1 << n);
+    if (channels & 4)
+        wave_run(&p->wave, t);
 }
 
 void gba_psg_tick(GbaPsg *p, int64_t t)
@@ -194,6 +250,8 @@ void gba_psg_tick(GbaPsg *p, int64_t t)
             if (s->length && s->stop && --s->length == 0)
                 s->playing = 0;
         }
+        if (p->wave.length && p->wave.stop && --p->wave.length == 0)
+            p->wave.playing = 0;
         break;
     case 7:
         for (int n = 0; n < 2; n++) {
@@ -214,6 +272,7 @@ void gba_psg_tick(GbaPsg *p, int64_t t)
 static void write_byte(GbaPsg *p, int64_t t, uint32_t offset, uint8_t value)
 {
     GbaSquare *s1 = &p->square[0];
+    GbaWave *w = &p->wave;
     switch (offset) {
     case 0x060: {  /* NR10: sweep */
         gba_psg_run(p, t, 1);
@@ -256,6 +315,30 @@ static void write_byte(GbaPsg *p, int64_t t, uint32_t offset, uint8_t value)
         gba_psg_run(p, t, offset == 0x065 ? 1 : 2);
         square_control(p, offset == 0x06D, value);
         break;
+    case 0x070:  /* NR30: 32 or 64 samples, the bank, on */
+        w->size = (value >> 5) & 1;
+        w->bank = (value >> 6) & 1;
+        gba_psg_run(p, t, 4);
+        w->enable = (value >> 7) & 1;
+        if (!w->enable)
+            w->playing = 0;
+        break;
+    case 0x072:  /* NR31: length */
+        gba_psg_run(p, t, 4);
+        w->length = 256 - value;
+        break;
+    case 0x073:  /* volume */
+        gba_psg_run(p, t, 4);
+        w->volume = value >> 5;
+        break;
+    case 0x074:  /* NR33: rate bits 0-7 */
+        gba_psg_run(p, t, 4);
+        w->rate = (w->rate & 0x700) | value;
+        break;
+    case 0x075:  /* NR34 */
+        gba_psg_run(p, t, 4);
+        wave_control(p, t, value);
+        break;
     case 0x080:  /* NR50: volumes */
         gba_psg_run(p, t, 0xF);
         p->volume_right = value & 7;
@@ -276,7 +359,9 @@ static uint16_t readable(uint32_t offset)
     switch (offset) {
     case 0x060: return 0x007F;
     case 0x062: case 0x068: return 0xFFC0;
-    case 0x064: case 0x06C: return 0x4000;
+    case 0x064: case 0x06C: case 0x074: return 0x4000;
+    case 0x070: return 0x00E0;
+    case 0x072: return 0xE000;
     case 0x080: return 0xFF77;
     default: return 0;
     }
@@ -296,9 +381,11 @@ void gba_psg_enable(GbaPsg *p, int64_t t, int on)
     if (!on) {
         for (int n = 0; n < 2; n++)
             p->square[n].playing = 0;
+        p->wave.playing = 0;
         p->enable = 0;
         for (uint32_t r = 0x060; r <= 0x080; r += 2)
             gba_psg_write(p, t, r, 0, 0xFFFF);
+        p->wave.sample = 0;
     } else if (!p->enable) {
         p->enable = 1;
         p->frame = 7;
@@ -307,14 +394,30 @@ void gba_psg_enable(GbaPsg *p, int64_t t, int on)
 
 int gba_psg_status(const GbaPsg *p)
 {
-    return p->square[0].playing | p->square[1].playing << 1;
+    return p->square[0].playing | p->square[1].playing << 1 | p->wave.playing << 2;
+}
+
+/* Wave RAM word `index` (0-3) of the bank the wave channel is not playing (bank 1 while the
+ * sound is off). */
+void gba_psg_wave_write(GbaPsg *p, int64_t t, int index, uint32_t value)
+{
+    int bank = p->enable ? !p->wave.bank : 1;
+    gba_psg_run(p, t, 4);
+    p->wave.ram[index | bank * 4] = value;
+}
+
+uint32_t gba_psg_wave_read(GbaPsg *p, int64_t t, int index)
+{
+    int bank = p->enable ? !p->wave.bank : 1;
+    gba_psg_run(p, t, 4);
+    return p->wave.ram[index | bank * 4];
 }
 
 void gba_psg_mix(const GbaPsg *p, int *left, int *right)
 {
-    int levels[2] = {p->square[0].sample, p->square[1].sample};
+    int levels[3] = {p->square[0].sample, p->square[1].sample, p->wave.sample};
     int l = 0, r = 0;
-    for (int n = 0; n < 2; n++) {
+    for (int n = 0; n < 3; n++) {
         if (p->sides & (0x10 << n))
             l += levels[n];
         if (p->sides & (0x01 << n))

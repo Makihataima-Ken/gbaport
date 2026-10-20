@@ -47,7 +47,8 @@ enum {  /* I/O register offsets from 0x04000000 */
     GBA_REG_DISPCNT = 0x000, GBA_REG_DISPSTAT = 0x004, GBA_REG_VCOUNT = 0x006,
     GBA_REG_SOUND_FIRST = 0x060, GBA_REG_SOUND_LAST = 0x0AE,
     GBA_REG_SOUNDCNT_L = 0x080, GBA_REG_SOUNDCNT_H = 0x082, GBA_REG_SOUNDCNT_X = 0x084,
-    GBA_REG_SOUNDBIAS = 0x088, GBA_REG_FIFO_A = 0x0A0, GBA_REG_FIFO_B = 0x0A4,
+    GBA_REG_SOUNDBIAS = 0x088, GBA_REG_WAVE_RAM = 0x090, GBA_REG_FIFO_A = 0x0A0,
+    GBA_REG_FIFO_B = 0x0A4,
     GBA_REG_DMA0SAD = 0x0B0, GBA_REG_DMA3CNT_H = 0x0DE,
     GBA_REG_TM0CNT_L = 0x100, GBA_REG_TM3CNT_H = 0x10E,
     GBA_REG_SIO_FIRST = 0x120, GBA_REG_KEYINPUT = 0x130, GBA_REG_KEYCNT = 0x132,
@@ -129,9 +130,19 @@ typedef struct {
 } GbaSquare;
 
 typedef struct {
+    uint32_t ram[8];              /* wave RAM: bank 0 is words 0-3, bank 1 words 4-7 */
+    int size, bank, enable;       /* SOUND3CNT_L: 64 samples, the bank playing, on */
+    int volume;                   /* SOUND3CNT_H bits 13-15 */
+    int rate, length, stop;
+    int sample, playing;
+    int64_t next_update;          /* when the next sample comes */
+} GbaWave;
+
+typedef struct {
     int enable;                   /* SOUNDCNT_X bit 7 */
     int frame;                    /* the frame sequencer's last step, 0-7 */
     GbaSquare square[2];
+    GbaWave wave;
     int volume_left, volume_right;  /* SOUNDCNT_L: 0-7 */
     uint8_t sides;                  /* SOUNDCNT_L's high byte: bits 0-3 right, 4-7 left */
 } GbaPsg;
@@ -281,6 +292,8 @@ void gba_psg_tick(GbaPsg *p, int64_t t);                /* a frame sequencer ste
 uint16_t gba_psg_write(GbaPsg *p, int64_t t, uint32_t offset, uint16_t value, uint16_t mask);
 void gba_psg_enable(GbaPsg *p, int64_t t, int on);
 int gba_psg_status(const GbaPsg *p);                  /* bit n: channel n + 1 plays */
+void gba_psg_wave_write(GbaPsg *p, int64_t t, int index, uint32_t value);
+uint32_t gba_psg_wave_read(GbaPsg *p, int64_t t, int index);
 void gba_psg_mix(const GbaPsg *p, int *left, int *right);
 
 void gba_dma_write(GbaRuntime *rt, int n, uint16_t control);

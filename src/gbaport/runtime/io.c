@@ -68,7 +68,7 @@ uint16_t gba_io_read(GbaRuntime *rt, uint32_t offset)
         return gba_timer_counter(rt, (int)(offset - GBA_REG_TM0CNT_L) / 4);
     if (offset == GBA_REG_KEYINPUT)
         return (uint16_t)(0x3FF & ~rt->keys_pressed);
-    if (offset == GBA_REG_SOUNDCNT_X)
+    if (offset == GBA_REG_SOUNDCNT_X || (offset >= GBA_REG_WAVE_RAM && offset < GBA_REG_FIFO_A))
         return gba_audio_read(rt, offset);
     return IO(rt, offset);
 }

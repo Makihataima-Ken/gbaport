@@ -18,7 +18,7 @@
  * The PSG's four channels (psg.c) are added before the FIFOs, at 25%, 50% or 100% as
  * SOUNDCNT_H's bits 0-1 say. Its frame sequencer steps every 32768 cycles; a sample that
  * ends when a step comes is made before the step. While the sound hardware is off
- * (SOUNDCNT_X bit 7), the PSG's registers ignore writes. */
+ * (SOUNDCNT_X bit 7), the PSG's registers ignore writes; wave RAM does not. */
 #include <string.h>
 
 #include "gba_runtime.h"
@@ -181,6 +181,15 @@ uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16
         return (uint16_t)((value & 0x0080) | gba_psg_status(&a->psg));
     case GBA_REG_SOUNDBIAS:
         return value & 0xC3FE;
+    case GBA_REG_WAVE_RAM: case GBA_REG_WAVE_RAM + 2: case GBA_REG_WAVE_RAM + 4:
+    case GBA_REG_WAVE_RAM + 6: case GBA_REG_WAVE_RAM + 8: case GBA_REG_WAVE_RAM + 10:
+    case GBA_REG_WAVE_RAM + 12: case GBA_REG_WAVE_RAM + 14: {  /* with the other half stored */
+        uint32_t low = offset & ~3u;
+        uint32_t word = offset & 2 ? IO(rt, low) | (uint32_t)value << 16
+                                   : value | (uint32_t)IO(rt, low + 2) << 16;
+        gba_psg_wave_write(&a->psg, t, (int)(offset - GBA_REG_WAVE_RAM) / 4, word);
+        return value;
+    }
     case GBA_REG_FIFO_A:
     case GBA_REG_FIFO_A + 2:
     case GBA_REG_FIFO_B:
@@ -199,6 +208,11 @@ uint16_t gba_audio_write(GbaRuntime *rt, uint32_t offset, uint16_t value, uint16
 uint16_t gba_audio_read(GbaRuntime *rt, uint32_t offset)
 {
     gba_audio_run(rt, rt->cpu.cycles);
+    if (offset >= GBA_REG_WAVE_RAM && offset < GBA_REG_WAVE_RAM + 16) {
+        int64_t t = (int64_t)(rt->cpu.cycles - rt->audio.start);
+        uint32_t word = gba_psg_wave_read(&rt->audio.psg, t, (int)(offset - GBA_REG_WAVE_RAM) / 4);
+        return (uint16_t)(offset & 2 ? word >> 16 : word);
+    }
     if (offset == GBA_REG_SOUNDCNT_X)
         return (uint16_t)((IO(rt, offset) & 0x0080) | gba_psg_status(&rt->audio.psg));
     return IO(rt, offset);
@@ -206,6 +220,7 @@ uint16_t gba_audio_read(GbaRuntime *rt, uint32_t offset)
 
 void gba_audio_clear(GbaRuntime *rt)
 {
+    memset(rt->audio.psg.wave.ram, 0, sizeof rt->audio.psg.wave.ram);
     for (uint32_t r = GBA_REG_SOUND_FIRST; r <= GBA_REG_SOUNDCNT_X; r += 2)
         IO(rt, r) = gba_audio_write(rt, r, 0, 0xFFFF);
     IO(rt, GBA_REG_SOUNDBIAS) = gba_audio_write(rt, GBA_REG_SOUNDBIAS, 0x200, 0xFFFF);
