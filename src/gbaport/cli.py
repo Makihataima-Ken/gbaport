@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 from gbaport import __version__
@@ -10,15 +11,17 @@ from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issue
 from gbaport.analysis.config import GameConfig, default_config_path, load_config
 from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save_trace
 from gbaport.disasm import disassemble, format_line
-from gbaport.inputs import load_input
+from gbaport.inputs import format_input, load_input
 from gbaport.isa.model import Mode
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.build import HOSTS, compile_native, generated_sources, write_sources
+from gbaport.native.mgba import run_mgba
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
 from gbaport.rom.info import inspect_rom
 from gbaport.tracing.gdb import GdbClient, GdbError, SocketTransport
 from gbaport.tracing.session import TraceSession, check_loaded_rom
+from gbaport.tracing.transfers import load_transfers, to_trace
 from gbaport.verify import verify
 
 
@@ -142,6 +145,12 @@ def _add_trace_command(commands) -> None:
         default=[],
         help="other trace files to import (games/<game_code>/traces/*.trace are read too)",
     )
+    trace.add_argument(
+        "--frames",
+        type=_at_least(1),
+        help="play this many frames in gbaport's own mGBA instead of through its GDB server",
+    )
+    trace.add_argument("--input", help="input file to play (with --frames; default: no keys)")
     trace.add_argument("--host", default="127.0.0.1", help="GDB server host (default 127.0.0.1)")
     trace.add_argument("--port", type=int, default=2345, help="GDB server port (default 2345)")
     trace.add_argument("--seconds", type=float, help="stop after this long (default: Ctrl+C)")
@@ -168,6 +177,10 @@ def _run_trace(args: argparse.Namespace) -> int:
     def analyze(trace: Trace):
         return analyze_rom(rom, config, (*fixed, trace)).exploration
 
+    if args.frames is not None:
+        return _trace_in_mgba(args, recorded, analyze, out)
+    if args.input:
+        raise ValueError("--input needs --frames (through the GDB server, you play the game)")
     client = GdbClient(SocketTransport.connect(args.host, args.port))
     try:
         client.handshake()
@@ -188,6 +201,24 @@ def _run_trace(args: argparse.Namespace) -> int:
         session.run(args.seconds)
     finally:
         client.close()
+    print(f"wrote {out} ({len(recorded.hits)} hits)")
+    return 0
+
+
+def _trace_in_mgba(args: argparse.Namespace, recorded: Trace, analyze, out: Path) -> int:
+    """Plays ``args.frames`` frames in gbaport-mgba and adds what its transfers resolve."""
+    with tempfile.TemporaryDirectory() as folder:
+        input_file = None
+        if args.input:  # the presses as Python reads them (see gbaport/verify.py)
+            input_file = Path(folder) / "trace.input"
+            input_file.write_text(format_input(load_input(args.input)), encoding="utf-8")
+        transfers_file = Path(folder) / "transfers.txt"
+        run_mgba(Path(args.rom), args.frames, input=input_file, trace=transfers_file)
+        transfers = load_transfers(transfers_file)
+    added = to_trace(transfers, analyze, recorded)
+    save_trace(recorded, out)
+    print(f"played {args.frames} frames in mGBA: {len(transfers)} indirect transfers, "
+          f"{added} new hits")
     print(f"wrote {out} ({len(recorded.hits)} hits)")
     return 0
 

@@ -26,6 +26,7 @@ from pathlib import Path
 import gbaport.native.build as native
 from gbaport.analysis.analyze import analyze_rom
 from gbaport.analysis.config import parse_config
+from gbaport.analysis.traces import Trace
 from gbaport.lift.program import lift_program
 from gbaport.native.toolchain import find_clang, llvm_tool
 from gbaport.rom.image import RomImage
@@ -160,10 +161,11 @@ class Run:
         assert self.lines and self.lines[-1].startswith("DONE "), "\n".join(self.lines)
 
 
-def native_program(rom: TestRom, host: str = "headless") -> Path:
-    """Recompile ``rom`` and build it with ``host`` (cached by the C sources)."""
+def native_program(rom: TestRom, host: str = "headless", traces: tuple[Trace, ...] = ()) -> Path:
+    """Recompile ``rom`` with ``traces`` and build it with ``host`` (cached by the C
+    sources)."""
     image = RomImage(rom.data)
-    analysis = analyze_rom(image, parse_config(rom.config), ())
+    analysis = analyze_rom(image, parse_config(rom.config), traces)
     lifted = lift_program(analysis.program, analysis.exploration)
     files = native.generated_sources(lifted, rom.data, analysis.save)
     runtime = [path.read_bytes() for path in sorted(native.RUNTIME.glob("*.[ch]"))]
@@ -196,14 +198,16 @@ def run_program(command: list[str], env: dict[str, str] | None = None) -> subpro
 def run_rom(
     rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None,
     host: str = "headless", args: tuple[str, ...] = (), env: dict[str, str] | None = None,
+    traces: tuple[Trace, ...] = (),
 ) -> Run:
-    """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set).
+    """Run the native build of ``rom`` (given ``rom_file`` instead of the ROM, if set),
+    recompiled with ``traces``.
 
     The game's save file is ``save``; without one, every run starts with a blank save.
     ``args`` go to the program after the usual ones. The window host runs with SDL's dummy
     video and sound drivers (no window opens, nothing plays), unless ``env`` says otherwise.
     """
-    program = native_program(rom, host)
+    program = native_program(rom, host, traces)
     path = program.parent / f"input-{_digest(rom_file or rom.data)}.gba"
     path.write_bytes(rom_file or rom.data)
     if host == "sdl":

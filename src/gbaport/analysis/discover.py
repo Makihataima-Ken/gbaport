@@ -439,6 +439,9 @@ class _Explorer:
         elif kind is FlowKind.INDIRECT:
             here = self._indirect(ins, history)
         elif kind is FlowKind.RETURN:
+            hits = self.traced.get(ins.addr, ())
+            if hits:  # a return that went somewhere other than a caller: entries there
+                self._traced_jump(ins, hits, switch=False)
             here = ()
         else:  # STOP
             if ins.op is Op.UNDEFINED:
