@@ -24,13 +24,16 @@ ld.lld, recompile them and run them natively; ROMs and builds are cached in
 `gbaport-romcache`. They also download and run jsmolka's CPU and PPU test ROMs (MIT
 licence; `tests/publicroms/jsmolka` has their configs), so the first run needs a network
 connection. The window tests build SDL3 the first time (see below) and run with SDL's
-dummy video driver, so no window opens.
+dummy video and sound drivers, so no window opens and nothing plays.
 
-The renderer tests compare every picture, pixel for pixel, with mGBA's: they build mGBA
-0.10.5's GBA core (MPL-2.0, a development tool only; nothing ships it) from source the
-first time, with the same CMake, Ninja and clang as SDL3, into the same cache folder. A
-picture that differs is written next to mGBA's in `gbaport-romcache/pictures`, and the
-test's message names the file.
+The renderer and sound tests compare every picture, pixel for pixel, and every sound,
+sample by sample, with mGBA's: they build mGBA 0.10.5's GBA core (MPL-2.0, a development
+tool only; nothing ships it) from source the first time, with the same CMake, Ninja and
+clang as SDL3, into the same cache folder. Because the recompiled code's timing is an
+estimate, a change in a sound may come up to two samples (61 microseconds) earlier or
+later than in mGBA. A picture that differs is written next to mGBA's in
+`gbaport-romcache/pictures`, a sound that differs next to mGBA's in
+`gbaport-romcache/sounds` (WAV files), and the test's message names the files.
 
 ## Commands
 
@@ -60,6 +63,10 @@ line as the GBA does (tiled, rotating and bitmap backgrounds, sprites, windows, 
 mosaic) from the registers as they are at the end of that line, so effects that change
 them between lines work. Closing the window ends the run.
 
+The sound (the four Game Boy channels and the two DMA sound channels, mixed 32768 times a
+second as the GBA mixes them) plays on the default sound device; SDL converts it to the
+device's rate. With `--fast`, or when there is no sound device, the game runs silent.
+
 The first build also builds SDL3 3.4.18 from source, once, into `%LOCALAPPDATA%\gbaport`
 (`GBAPORT_CACHE` moves it). That needs CMake and Ninja (the Visual Studio Build Tools
 include both; elsewhere `winget install Kitware.CMake Ninja-build.Ninja`), a network
@@ -73,7 +80,8 @@ without a window, for tests and scripts. Both programs take:
 - `--press FRAME:KEYS`: hold KEYS from that frame on (repeatable). KEYS are A, B, SELECT,
   START, RIGHT, LEFT, UP, DOWN, R and L joined with `+`, or `none`;
 - `--registers`: print the CPU registers when the run ends;
-- `--screenshot PATH`: save the last picture as a BMP file.
+- `--screenshot PATH`: save the last picture as a BMP file;
+- `--audio PATH`: write the sound to a WAV file (16-bit stereo, 32768 samples a second).
 
 Lines the game prints through mGBA's debug log go to stdout. The exit status is 0 when
 the window is closed, or when the game executes the BIOS Stop call and nothing wakes it
