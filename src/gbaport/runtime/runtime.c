@@ -151,9 +151,23 @@ void gba_set_keys(GbaRuntime *rt, uint16_t pressed)
 
 /* ---- hooks from gba_cpu.h: what recompiled code cannot handle itself -------------- */
 
-/* addr has bit 0 set when execution was to go on in Thumb state. */
+/* What a lookup of an outer call's return address runs: it goes back there at once, and
+ * the calls in between see unwind_depth and return too (gba_call, GBA_UNWOUND). */
+static uint32_t unwinding(GbaCtx *ctx)
+{
+    return ctx->rets[ctx->unwind_depth];
+}
+
+/* addr has bit 0 set when execution was to go on in Thumb state. The return address of a
+ * call further out is not missing code: execution goes back to that call (the innermost,
+ * if several), as when a task switch returns into the task that called it. */
 GbaFn gba_missing(GbaCtx *ctx, uint32_t addr)
 {
+    for (uint32_t depth = ctx->call_depth; depth > 0; depth--)
+        if (!((ctx->rets[depth] ^ addr) & ~1u)) {
+            ctx->unwind_depth = depth;
+            return unwinding;
+        }
     int thumb = addr & 1;
     gba_fail(gba_rt(ctx),
              "no recompiled code at 0x%08x (%s state, lr = 0x%08x): add it to game.toml "

@@ -5,9 +5,10 @@ whatever leaves the function (a return, a tail call, a jump through a register)
 returns the address to continue at, with bit 0 set when execution goes on in
 Thumb state. The lookup ignores that bit; a miss reports it, so the user knows
 which state the missing code is in. A call sets LR and runs the callee chain
-with ``gba_call`` until it comes back to the return address. Blocks that loops
-or switches jump back to check for due events, so long loops still let the
-scheduler run.
+with ``gba_call`` until it comes back to the return address; after it,
+``GBA_UNWOUND`` returns too when code went back to a call further out (a task
+switch). Blocks that loops or switches jump back to check for due events, so long
+loops still let the scheduler run.
 
 Time is counted as mGBA counts it (gba_cpu.h): each instruction costs the fetch of
 the next one at the wait states of the memory the code is in (set by WAITCNT),
@@ -161,7 +162,8 @@ class _FunctionLifter:
             refill = f"gba_jumped(ctx, {_refill_expr(ins.target, ins.mode)});"
             if ins.target == after:  # only sets LR (a weak call, or reading the pc)
                 return [set_lr, refill], False
-            return [set_lr, refill, self._call(ins.target, ret, ins.mode)], False
+            call = self._call(ins.target, ret, ins.mode)
+            return [set_lr, refill, call, "GBA_UNWOUND();"], False
         if op is Op.BL_LO:
             ret = self._return_address(ins)
             return [
@@ -169,6 +171,7 @@ class _FunctionLifter:
                 f"ctx->r[14] = {hexu(ret)};",
                 "gba_jumped(ctx, gba_refill(ctx, t));",
                 f"gba_call(ctx, t, {hexu(ret)});",
+                "GBA_UNWOUND();",
             ], False
         try:
             effects = lift_effects(ins)
@@ -179,7 +182,7 @@ class _FunctionLifter:
             return effects, False
         body = effects + self._mask(ins) + ["gba_jumped(ctx, gba_refill(ctx, t));"]
         if links_to_next(prev):  # mov lr, pc just before: a call through a register
-            return body + ["gba_call(ctx, t, ctx->r[14]);"], False
+            return body + ["gba_call(ctx, t, ctx->r[14]);", "GBA_UNWOUND();"], False
         return body + self._switch(ins) + ["GBA_EXIT(t);"], True
 
     def _return_address(self, ins: Instruction) -> int:

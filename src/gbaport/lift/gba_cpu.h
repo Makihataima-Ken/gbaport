@@ -25,6 +25,10 @@ enum {
 struct GbaCtx;
 typedef uint32_t (*GbaFn)(struct GbaCtx *ctx);
 
+#ifndef GBA_MAX_CALL_DEPTH
+#define GBA_MAX_CALL_DEPTH 1024u
+#endif
+
 typedef struct GbaCtx {
     uint32_t r[16];             /* registers of the current mode; r[15] is unused */
     uint32_t n, z, c, v;        /* condition flags, each 0 or 1 */
@@ -36,6 +40,8 @@ typedef struct GbaCtx {
     uint64_t cycles;            /* estimated CPU cycles run so far */
     uint64_t next_event;        /* gba_events() runs once cycles reach this */
     uint32_t call_depth;        /* gba_call chains currently running */
+    uint32_t rets[GBA_MAX_CALL_DEPTH + 1]; /* each running call's return address, by depth */
+    uint32_t unwind_depth;      /* nonzero: going back to the call at this depth */
     /* Timing as mGBA counts it: the wait states of a 16- or 32-bit access to each memory
      * region (addr >> 24; N: nonsequential, S: sequential), set from WAITCNT for the
      * cartridge, and mGBA's model of the cartridge's prefetch buffer. */
@@ -61,29 +67,49 @@ void gba_call_overflow(GbaCtx *ctx, uint32_t ret); /* calls nested too deep; nev
 
 /* ---- control flow ---------------------------------------------------------- */
 
-#ifndef GBA_MAX_CALL_DEPTH
-#define GBA_MAX_CALL_DEPTH 1024u
-#endif
-
-/* Runs the chain that starts at guest address next until it comes back to ret. */
+/* Runs the chain that starts at guest address next until it comes back to ret. When code
+ * goes to the return address of a call further out instead (gba_missing sets unwind_depth
+ * to that call's depth), the chains in between end and their functions return too
+ * (GBA_UNWOUND), down to that call, which carries on after its return address. */
 static inline void gba_call(GbaCtx *ctx, uint32_t next, uint32_t ret)
 {
-    if (++ctx->call_depth > GBA_MAX_CALL_DEPTH)
+    uint32_t depth = ++ctx->call_depth;
+    if (depth > GBA_MAX_CALL_DEPTH)
         gba_call_overflow(ctx, ret);
-    while ((next ^ ret) & ~1u)
+    ctx->rets[depth] = ret;
+    while ((next ^ ret) & ~1u) {
         next = ctx->lookup(ctx, next)(ctx);
+        if (ctx->unwind_depth) {  /* code went back to a call further out */
+            if (ctx->unwind_depth != depth)
+                break;
+            ctx->unwind_depth = 0;  /* this one: carry on after it */
+        }
+    }
     ctx->call_depth--;
 }
 
 /* The same for a call to a recompiled function, which needs no lookup to start. */
 static inline void gba_call_direct(GbaCtx *ctx, GbaFn fn, uint32_t ret)
 {
-    if (++ctx->call_depth > GBA_MAX_CALL_DEPTH)
+    uint32_t depth = ++ctx->call_depth;
+    if (depth > GBA_MAX_CALL_DEPTH)
         gba_call_overflow(ctx, ret);
+    ctx->rets[depth] = ret;
     uint32_t next = fn(ctx);
     ctx->call_depth--;
+    if (ctx->unwind_depth) {
+        if (ctx->unwind_depth != depth)
+            return;
+        ctx->unwind_depth = 0;
+        next = ret;
+    }
     gba_call(ctx, next, ret);
 }
+
+/* After a call: when code went back to a call further out, this function returns too. */
+#define GBA_UNWOUND() do { \
+        if (ctx->unwind_depth) return ctx->rets[ctx->unwind_depth]; \
+    } while (0)
 
 #define GBA_EXIT(target) do { \
         uint32_t gba_exit_ = (target); \
