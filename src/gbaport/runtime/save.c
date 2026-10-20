@@ -4,11 +4,16 @@
  * - Flash: 64 or 128 KiB, also on the 8-bit bus, driven by command sequences written to
  *   0x0E005555 and 0x0E002AAA: chip ID, chip and 4 KiB sector erase, byte write, and (128
  *   KiB) bank switching. It identifies as a Panasonic (64 KiB) or Sanyo (128 KiB) chip.
- *   Writes can only clear bits, as on the real chip; erasing sets them again.
+ *   Writes can only clear bits, as on the real chip; erasing sets them again, and both
+ *   take no time. (mGBA makes a byte take 650 cycles and a sector 30000, with the last
+ *   sector erased reading 0x5F meanwhile; it then fails jsmolka's Flash tests, which the
+ *   real chip and this model pass.)
  * - EEPROM: 512 bytes (6-bit block addresses) or 8 KiB (14-bit) behind 0x0D000000, one bit
  *   per halfword, normally by DMA. Requests: "11" + address + "0" reads a 64-bit block,
  *   which then comes out as 4 ignored bits and 64 data bits; "10" + address + 64 bits +
- *   "0" writes one. Reads report ready (1) when no block is coming out. The chip's size is
+ *   "0" writes one, after which the chip is busy for 115000 cycles from the last data bit
+ *   (about 6.9 ms, as in mGBA; GBATEK gives about 6.6). Reads report ready (1) when it is
+ *   not, and no block is coming out. The chip's size is
  *   not in the ROM: it follows from the first DMA's length (9 or 73 halfwords: 512 bytes;
  *   17 or 81: 8 KiB) or from a save file's size.
  * Blank chips read 0xFF. The host stores and loads `data` through gba_save_*. */
@@ -172,6 +177,8 @@ void gba_eeprom_write(GbaRuntime *rt, uint32_t value)
     uint32_t block = 0;
     if (s->eeprom_count >= 2 + bits)
         block = eeprom_bits(s, 2, bits) & ((s->size / 8) - 1);
+    if (command == 2 && s->eeprom_count == 2 + bits + 64)  /* the last data bit */
+        s->eeprom_ready = rt->cpu.cycles + 115000;
     if (command == 3 && s->eeprom_count == 2 + bits + 1) {  /* read request */
         s->eeprom_out = 0;
         for (int i = 0; i < 8; i++)
@@ -192,7 +199,7 @@ uint32_t gba_eeprom_read(GbaRuntime *rt)
 {
     GbaSave *s = &rt->save;
     if (!s->eeprom_out_left)
-        return 1;  /* ready */
+        return rt->cpu.cycles >= s->eeprom_ready;  /* 1: ready */
     s->eeprom_out_left--;
     if (s->eeprom_out_left >= 64)
         return 0;  /* the 4 bits before the data */

@@ -1,6 +1,10 @@
 """Code takes as many cycles as in mGBA: the cycles test ROM times kinds of code with
 timer 0 under four WAITCNT settings, natively and in mGBA, and draws the counts. An
-interrupt takes about as long too."""
+interrupt takes about as long, and DMA and the EEPROM take as long too.
+
+mGBA starts a DMA 3 cycles after it is asked for and lets the CPU run on until then; here
+the CPU waits those 3 cycles at once, so a transfer may end a cycle or two later than in
+mGBA."""
 
 import pytest
 from mgbaref import mgba_picture
@@ -11,7 +15,8 @@ SETTINGS = ["0x0000", "0x4317", "0x0317", "0x4314"]  # default; fast, prefetch; 
 SCENES = ["thumb alu", "thumb ldr iwram", "thumb ldr ewram", "thumb ldr rom", "thumb ldr vram",
           "thumb str iwram", "thumb str ewram", "thumb str vram", "thumb ldm/stm ewram",
           "thumb ldm/stm iwram", "thumb mul small", "thumb mul large", "thumb branches",
-          "arm in rom", "arm in iwram"]
+          "arm in rom", "arm in iwram", "dma rom to ewram", "dma ewram to vram"]
+DMA_SLACK = 2  # cycles (see above)
 
 
 def drawn(picture: list[int], count: int) -> list[int]:
@@ -30,7 +35,10 @@ def measured() -> tuple[list[int], list[int]]:
 def test_code_takes_as_many_cycles_as_in_mgba(measured, setting, scene):
     ours, mgba = measured
     k = setting * len(SCENES) + scene
-    assert ours[k] == mgba[k]
+    if SCENES[scene].startswith("dma"):
+        assert abs(ours[k] - mgba[k]) <= DMA_SLACK, (ours[k], mgba[k])
+    else:
+        assert ours[k] == mgba[k]
 
 
 def test_an_hblank_interrupt_slows_the_cpu_about_as_much_as_in_mgba():
@@ -42,3 +50,20 @@ def test_an_hblank_interrupt_slows_the_cpu_about_as_much_as_in_mgba():
     assert ours[2] == mgba[2] == 41  # line 19's HBlank and the 40 after it
     cycles_a_loop = 40 * 1232 / mgba[0]
     assert abs(ours[1] - mgba[1]) * cycles_a_loop <= 4 * mgba[2]
+
+
+def test_an_hblank_dma_slows_the_cpu_as_much_as_in_mgba():
+    """Iterations of a busy loop over 40 lines, without and with 4 words at every HBlank."""
+    rom = build_test_rom("hblank_dma")
+    ours, mgba = drawn(our_picture(rom, 20), 2), drawn(mgba_picture(rom.data, 20), 2)
+    assert ours[0] == mgba[0]
+    assert abs(ours[1] - mgba[1]) <= 1  # a loop takes many more cycles than DMA_SLACK
+
+
+def test_the_eeprom_is_busy_as_long_as_in_mgba():
+    """Cycles from writing a block (by DMA) until the EEPROM is ready, and the reads that
+    took."""
+    rom = build_test_rom("eeprom_busy")
+    ours, mgba = drawn(our_picture(rom, 30), 2), drawn(mgba_picture(rom.data, 30), 2)
+    assert abs(ours[0] - mgba[0]) <= DMA_SLACK
+    assert ours[1] == mgba[1]

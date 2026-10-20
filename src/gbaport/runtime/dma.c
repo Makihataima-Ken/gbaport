@@ -7,11 +7,14 @@
  * destination step say. Special timing on channels 0 and 3 (video capture) is not handled.
  * The transfer goes through the normal memory accessors, so it sees every region's rules.
  *
- * A transfer's time is added to the CPU's cycles, except a FIFO's 4 words: those run from
- * a timer's overflow inside the scheduler, and two FIFOs on a timer that overflows every
- * cycle would then ask for more time than passes, so the game would never run again and
- * the sound would run ahead of the frames. At the rates games play (two FIFOs at 13379 to
- * 32768 bytes a second), the time left out is 0.1% to 0.3% of the CPU's. */
+ * The CPU waits while a transfer runs, as long as in mGBA: 3 cycles to start, then for
+ * each unit 2 cycles and the wait states of its source and destination (nonsequential for
+ * the first, sequential after it), unit by unit, so a unit sees the time it is copied at
+ * (the EEPROM's busy time counts from its last data bit). A FIFO's 4 words are not added:
+ * they run from a timer's overflow inside the scheduler, and two FIFOs on a timer that
+ * overflows every cycle would then ask for more time than passes, so the game would never
+ * run again and the sound would run ahead of the frames. At the rates games play (two
+ * FIFOs at 13379 to 32768 bytes a second), the time left out is 0.1% to 0.3% of the CPU's. */
 #include "gba_runtime.h"
 
 #define IO(rt, offset) ((rt)->io[(offset) >> 1])
@@ -55,16 +58,23 @@ static void run(GbaRuntime *rt, int n, int fifo)
     uint32_t count = fifo ? 4 : d->count;
     if (gba_save_is_eeprom(rt, d->dst) || gba_save_is_eeprom(rt, d->src))
         gba_eeprom_dma(rt, d->count);  /* the length tells the EEPROM's size */
+    if (!fifo)  /* see the top of the file */
+        ctx->cycles += 3;
     for (uint32_t i = 0; i < count; i++) {
+        uint32_t sr = gba_region(d->src), dr = gba_region(d->dst);
         if (size == 4)
             gba_write32(ctx, d->dst & ~3u, gba_read32(ctx, d->src & ~3u));
         else
             gba_write16(ctx, d->dst & ~1u, gba_read16(ctx, d->src & ~1u));
         d->src += (uint32_t)src_step;
         d->dst += (uint32_t)dst_step;
+        if (fifo)
+            continue;
+        if (size == 4)
+            ctx->cycles += 2u + (i ? ctx->s32[sr] + ctx->s32[dr] : ctx->n32[sr] + ctx->n32[dr]);
+        else
+            ctx->cycles += 2u + (i ? ctx->s16[sr] + ctx->s16[dr] : ctx->n16[sr] + ctx->n16[dr]);
     }
-    if (!fifo)  /* see the top of the file */
-        ctx->cycles += 4 + 2 * (uint64_t)count;
     int timing = (control >> 12) & 3;
     if ((control & 0x0200) && timing != 0) {  /* repeat: wait for the next trigger */
         d->count = word_count(rt, n);

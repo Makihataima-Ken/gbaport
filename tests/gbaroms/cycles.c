@@ -94,6 +94,18 @@ static uint32_t arm_iwram(const volatile void *where)
     return (uint16_t)(TM0 - t);
 }
 
+/* DMA 3, while the CPU waits. The timer is read a few instructions later: mGBA starts a
+ * transfer 3 cycles after it is asked for, and the CPU runs on until then. */
+static uint32_t dma(const volatile void *from, volatile void *to, uint32_t control)
+{
+    uint16_t t = TM0;
+    REG_DMA_SAD(3) = (uint32_t)from;
+    REG_DMA_DAD(3) = (uint32_t)to;
+    REG_DMA_CNT(3) = control;
+    __asm__ volatile("nop\nnop\nnop\nnop\nnop\nnop\nnop\nnop" ::: "memory");
+    return (uint16_t)(TM0 - t);
+}
+
 static const uint16_t SETTINGS[4] = {0x0000, 0x4317, 0x0317, 0x4314};
 
 int main(void)
@@ -118,6 +130,8 @@ int main(void)
         record(thumb_branches());
         record(arm_rom(EWRAM_WORDS));
         record(arm_iwram(EWRAM_WORDS));
+        record(dma(rom_words, EWRAM_WORDS, 0x84000040));  /* 64 words */
+        record(dma(EWRAM_WORDS, VRAM16 + 0x8000, 0x80000040));  /* 64 halfwords */
     }
     REG_TM_CNT_H(0) = 0;
     for (int i = 0; i < 2; i++) {  /* two whole pictures with every count */

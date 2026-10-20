@@ -86,6 +86,7 @@ typedef struct {
     uint32_t eeprom_count;
     uint64_t eeprom_out;      /* the block being read out */
     uint32_t eeprom_out_left; /* bits still to come: 4 ignored, then 64 */
+    uint64_t eeprom_ready;     /* busy writing a block until this cycle */
 } GbaSave;
 
 typedef struct GbaRuntime GbaRuntime;
