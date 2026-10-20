@@ -3,6 +3,7 @@ rate. SDL's "disk" sound driver stands in for a sound card here: it plays in rea
 into a file, at SDL's default rate, 44100 samples a second."""
 
 import array
+import statistics
 from itertools import pairwise
 
 from romtest import build_test_rom, run_rom
@@ -29,8 +30,14 @@ def test_the_window_plays_the_tone_at_its_pitch_on_a_44_khz_device(tmp_path):
     assert 1.5 < seconds < 3.5  # 150 frames (2.5 s) went to the device as they came
     middle = left[len(left) // 4: 3 * len(left) // 4]  # past the start and the end
     mean = sum(middle) / len(middle)
-    crossings = sum((a < mean) != (b < mean) for a, b in pairwise(middle))
-    assert abs(crossings / 2 / (len(middle) / DEVICE_RATE) - TONE_HZ) < 4
+    rises = [i for i, (a, b) in enumerate(pairwise(middle)) if a < mean <= b]
+    periods = [b - a for a, b in pairwise(rises)]
+    # A busy machine can leave the device without samples for a moment, and SDL fills the
+    # gap with silence: the periods a gap stretches are left out.
+    steady = [n for n in periods if n < 1.5 * statistics.median(periods)]
+    assert sum(steady) > 0.75 * len(middle)
+    # the stream plays up to 1% faster or slower to keep its queue (host_sound_speed)
+    assert abs(DEVICE_RATE / statistics.fmean(steady) - TONE_HZ) < 0.015 * TONE_HZ
 
 
 def test_the_window_runs_silent_without_a_sound_device():
