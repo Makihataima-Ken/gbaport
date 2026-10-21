@@ -19,11 +19,13 @@
  * plays up to 1% faster or slower to keep it so. Without a sound device the game runs
  * silent (one warning); with --fast it runs silent too.
  *
- * On a phone (Android) the picture fills the screen, held sideways, as large as it fits
- * (touch.c lays it out). The ROM is the app's asset game.gba and the save file lives in
- * the app's own storage. Everything the game and the runtime print goes to the system
- * log (logcat, tag "gbaport"); a run that ends with an error shows it before the app
- * closes. The options come from the app's intent (GameActivity.java). */
+ * On a phone (Android) the picture fills the screen, held sideways, as large as it fits,
+ * and the GBA's buttons are drawn over it (touch.c lays them out and follows the fingers
+ * on them) until a gamepad's button is pressed; touching the screen brings them back.
+ * The ROM is the app's asset game.gba and the save file lives in the app's own storage.
+ * Everything the game and the runtime print goes to the system log (logcat, tag
+ * "gbaport"); a run that ends with an error shows it before the app closes. The options
+ * come from the app's intent (GameActivity.java). */
 #include <stdio.h>
 #include <string.h>
 
@@ -70,7 +72,10 @@ static const SDL_GamepadButton BUTTONS[10] = {
 };
 
 #if MOBILE
+static const char *const BUTTON_NAMES[TOUCH_BUTTONS] = {"A", "B", "SELECT", "START", "R", "L"};
+static const uint16_t BUTTON_KEYS[TOUCH_BUTTONS] = {1u << 0, 1u << 1, 1u << 2, 1u << 3, 1u << 8, 1u << 9};
 static TouchState touch;
+static int touch_hidden;       /* a gamepad is in use: the drawn buttons are out of the way */
 static int screen_w, screen_h;  /* in pixels */
 
 /* stdout and stderr go nowhere on Android: a thread passes their lines to logcat. */
@@ -109,6 +114,78 @@ static void lay_out(void)
         safe = (SDL_Rect){0, 0, (int)(screen_w / density), (int)(screen_h / density)};
     touch_layout(&touch.layout, (float)screen_w, (float)screen_h,
                  (TouchBox){safe.x * density, safe.y * density, safe.w * density, safe.h * density});
+    const TouchLayout *l = &touch.layout;  /* in the log, for tests that touch the screen */
+    printf("touch layout: screen %dx%d, D-pad at %.0f,%.0f radius %.0f", screen_w, screen_h,
+           l->pad_x, l->pad_y, l->pad_radius);
+    for (int b = 0; b < TOUCH_BUTTONS; b++)
+        printf(", %s at %.0f,%.0f", BUTTON_NAMES[b], l->buttons[b].x + l->buttons[b].w / 2,
+               l->buttons[b].y + l->buttons[b].h / 2);
+    printf("\n");
+}
+
+static void fill_circle(float x, float y, float radius)
+{
+    enum { SIDES = 40 };
+    SDL_FColor colour;
+    SDL_GetRenderDrawColorFloat(renderer, &colour.r, &colour.g, &colour.b, &colour.a);
+    SDL_Vertex corners[SIDES + 1] = {{{x, y}, colour, {0, 0}}};
+    int triangles[3 * SIDES];
+    for (int i = 0; i < SIDES; i++) {
+        float angle = (float)i * 2 * SDL_PI_F / SIDES;
+        corners[i + 1] = (SDL_Vertex){{x + radius * SDL_cosf(angle), y + radius * SDL_sinf(angle)},
+                                      colour, {0, 0}};
+        triangles[3 * i] = 0;
+        triangles[3 * i + 1] = 1 + i;
+        triangles[3 * i + 2] = 1 + (i + 1) % SIDES;
+    }
+    SDL_RenderGeometry(renderer, NULL, corners, SIDES + 1, triangles, 3 * SIDES);
+}
+
+/* `text` in SDL's 8x8 font, `size` pixels tall, centred on (x, y). */
+static void label(const char *text, float x, float y, float size)
+{
+    float scale = size / 8;
+    SDL_SetRenderScale(renderer, scale, scale);
+    SDL_RenderDebugText(renderer, (x - 4 * (float)strlen(text) * scale) / scale,
+                        (y - 4 * scale) / scale, text);
+    SDL_SetRenderScale(renderer, 1, 1);
+}
+
+static void shade(int pressed)
+{
+    SDL_SetRenderDrawColor(renderer, 255, 255, 255, pressed ? 110 : 45);
+}
+
+/* The buttons, see-through, brighter where `keys` holds them. */
+static void draw_buttons(uint16_t keys)
+{
+    const TouchLayout *l = &touch.layout;
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    float r = l->pad_radius, arm = r / 3;
+    shade(0);
+    fill_circle(l->pad_x, l->pad_y, r);
+    SDL_FRect arms[4] = {  /* right, left, up, down: GBA key bits 4 to 7 */
+        {l->pad_x + arm / 2, l->pad_y - arm / 2, r - arm / 2, arm},
+        {l->pad_x - r, l->pad_y - arm / 2, r - arm / 2, arm},
+        {l->pad_x - arm / 2, l->pad_y - r, arm, r - arm / 2},
+        {l->pad_x - arm / 2, l->pad_y + arm / 2, arm, r - arm / 2},
+    };
+    for (int d = 0; d < 4; d++) {
+        shade(keys >> (4 + d) & 1);
+        SDL_RenderFillRect(renderer, &arms[d]);
+    }
+    for (int b = 0; b < TOUCH_BUTTONS; b++) {
+        TouchBox box = l->buttons[b];
+        float x = box.x + box.w / 2, y = box.y + box.h / 2;
+        shade((keys & BUTTON_KEYS[b]) != 0);
+        if (b == TOUCH_A || b == TOUCH_B) {
+            fill_circle(x, y, box.w / 2.8f);  /* the circle in its box (touch.c's A_B_REACH) */
+            label(BUTTON_NAMES[b], x, y, box.h * 0.3f);
+        } else {
+            SDL_RenderFillRect(renderer, &(SDL_FRect){box.x, box.y, box.w, box.h});
+            label(BUTTON_NAMES[b], x, y, box.h * 0.35f);
+        }
+    }
 }
 #endif
 
@@ -124,13 +201,33 @@ static void handle(const SDL_Event *event)
         gamepad = NULL;
     }
 #if MOBILE
-    else if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
-             event->type == SDL_EVENT_WINDOW_SAFE_AREA_CHANGED)
+    const SDL_TouchFingerEvent *finger = &event->tfinger;  /* x and y: 0 to 1 across the screen */
+    switch (event->type) {
+    case SDL_EVENT_FINGER_DOWN:
+        touch_down(&touch, finger->fingerID, finger->x * screen_w, finger->y * screen_h);
+        touch_hidden = 0;
+        break;
+    case SDL_EVENT_FINGER_MOTION:
+        touch_move(&touch, finger->fingerID, finger->x * screen_w, finger->y * screen_h);
+        break;
+    case SDL_EVENT_FINGER_UP:
+    case SDL_EVENT_FINGER_CANCELED:
+        touch_up(&touch, finger->fingerID);
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        touch_hidden = 1;
+        break;
+    case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
+    case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
         lay_out();
+        break;
+    default:
+        break;
+    }
 #endif
 }
 
-/* The keys held on the keyboard, the gamepad and in the script. */
+/* The keys held on the keyboard, the gamepad, the touch screen and in the script. */
 static uint16_t held_keys(void)
 {
     const bool *keyboard = SDL_GetKeyboardState(NULL);
@@ -144,6 +241,9 @@ static uint16_t held_keys(void)
         Sint16 y = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
         keys |= (uint16_t)((x > 16000) << 4 | (x < -16000) << 5 | (y < -16000) << 6 | (y > 16000) << 7);
     }
+#if MOBILE
+    keys |= touch_keys(&touch);
+#endif
     return keys;
 }
 
@@ -155,6 +255,8 @@ static void present(void)
 #if MOBILE
     TouchBox s = touch.layout.screen;
     SDL_RenderTexture(renderer, texture, NULL, &(SDL_FRect){s.x, s.y, s.w, s.h});
+    if (!touch_hidden)
+        draw_buttons(touch_keys(&touch));
 #else
     SDL_RenderTexture(renderer, texture, NULL, NULL);
 #endif
@@ -235,6 +337,10 @@ static int on_stopped(GbaRuntime *rt, void *user)
         SDL_Event event;
         if (SDL_WaitEventTimeout(&event, 100))
             handle(&event);
+#if MOBILE
+        present();  /* the buttons light up under the fingers */
+        SDL_RenderPresent(renderer);
+#endif
         if (held_keys() != before) {
             gba_set_keys(rt, held_keys());
             paced = 0;  /* the clocks stood still: do not rush to catch up */

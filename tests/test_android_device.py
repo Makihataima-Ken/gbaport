@@ -1,6 +1,7 @@
 """Test ROMs' apps on gbaport's Android emulator (no window, no sound; the first boot takes
 a minute or two, and the tests shut it down after them if they started it)."""
 
+import re
 import time
 
 import pytest
@@ -53,6 +54,23 @@ def test_the_app_ends_when_the_game_does_and_starts_afresh(phone):
     phone.clear_log()
     phone.start(APP)
     phone.wait_for(r"^DONE 1 passed, 0 failed$")
+    phone.stop(APP)
+
+
+def test_the_buttons_on_the_screen_press_the_keys(phone):
+    launch(phone, "keys_log")
+    layout = phone.wait_for(r"^touch layout: .*").group(0)
+    phone.wait_for(r"^KEYS none$")
+    a = [float(v) for v in re.search(r" A at (\d+),(\d+)", layout).groups()]
+    x, y, radius = (float(v) for v in re.search(r"D-pad at (\d+),(\d+) radius (\d+)", layout).groups())
+    phone.hold(*a, 500)
+    phone.hold(x + 0.6 * radius, y - 0.6 * radius, 500)  # up and to the right
+    deadline = time.monotonic() + 10
+    while (keys := [line for line in phone.log() if line.startswith("KEYS")])[-1:] != ["KEYS none"] \
+            or len(keys) < 5:
+        assert time.monotonic() < deadline, keys
+        time.sleep(0.5)
+    assert keys == ["KEYS none", "KEYS A", "KEYS none", "KEYS RIGHT+UP", "KEYS none"]
     phone.stop(APP)
 
 

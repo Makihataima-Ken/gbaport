@@ -102,6 +102,14 @@ class Device:
     def running(self, app: str) -> bool:
         return bool(self.adb("shell", f"pidof {shlex.quote(app)} || true").strip())
 
+    def key(self, name: str) -> None:
+        """Presses one of Android's keys (KEYCODE_HOME: leave the app for the home screen)."""
+        self.shell("input", "keyevent", name)
+
+    def hold(self, x: float, y: float, ms: int) -> None:
+        """A finger on the screen at (x, y) pixels for ``ms`` milliseconds."""
+        self.shell("input", "swipe", *(str(round(v)) for v in (x, y, x, y)), str(ms))
+
     def clear_log(self) -> None:
         self.adb("logcat", "-c")
 
