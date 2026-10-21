@@ -41,6 +41,9 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host);
 /* Once a frame: the frame's samples (o->sound) and the sound file, the picture's hash,
  * scripted presses due by now, the save file, the frame limit. */
 void host_frame(HostOptions *o, GbaRuntime *rt);
+/* Stores the save file now, if the game changed its save since it was last stored
+ * (host_frame does once a second, host_finish at the end). */
+void host_store_save(HostOptions *o, GbaRuntime *rt);
 /* While the game is stopped: applies the next scripted press; 0 when none is left. */
 int host_script_wake(HostOptions *o);
 /* Stores the save, finishes the sound file, reports the end and returns the exit status. */

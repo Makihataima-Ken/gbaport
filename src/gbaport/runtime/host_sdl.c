@@ -9,9 +9,10 @@
  * GBA's 59.73 frames a second (--fast: as fast as it can); the window scales the picture
  * by whole steps (--scale: the starting size in GBA screens, 3 by default). Closing the
  * window ends the run with exit status 0. While the game is stopped (the BIOS Stop call)
- * the screen is dark and a key press wakes it, if the game asked for that; in a run
- * limited by --frames, a Stop that no scripted press wakes ends the run instead. The other
- * options and exit statuses are those of host_headless.c.
+ * the screen is dark and a key press wakes it, if the game asked for that; the save is
+ * stored as it stops, since nothing changes it until then. In a run limited by --frames,
+ * a Stop that no scripted press wakes ends the run instead. The other options and exit
+ * statuses are those of host_headless.c.
  *
  * The sound plays on the default sound device: an SDL audio stream takes the GBA's
  * samples (32768 a second) and converts them to the device's rate. About three frames'
@@ -23,9 +24,13 @@
  * and the GBA's buttons are drawn over it (touch.c lays them out and follows the fingers
  * on them) until a gamepad's button is pressed; touching the screen brings them back.
  * The ROM is the app's asset game.gba and the save file lives in the app's own storage.
- * Everything the game and the runtime print goes to the system log (logcat, tag
- * "gbaport"); a run that ends with an error shows it before the app closes. The options
- * come from the app's intent (GameActivity.java). */
+ * The save is stored when the app goes to the background (Android may kill it there at
+ * any time) and when it closes, besides once a second while it changes, so it survives
+ * the app being killed; in the background the game is paused. Everything the game and the
+ * runtime print goes to the system log (logcat, tag "gbaport"), with the frame rate and
+ * how much of each frame's time the game took every ten seconds; a run that ends with an
+ * error shows it before the app closes. The options come from the app's intent
+ * (GameActivity.java). */
 #include <stdio.h>
 #include <string.h>
 
@@ -48,6 +53,7 @@
 #define FRAME_NS 16742706u  /* 280896 cycles at 16.78 MHz: 16742706 + 153/512 ns */
 
 static HostOptions options;
+static GbaRuntime rt;
 static SDL_Window *window;
 static SDL_Renderer *renderer;
 static SDL_Texture *texture;
@@ -77,6 +83,8 @@ static const uint16_t BUTTON_KEYS[TOUCH_BUTTONS] = {1u << 0, 1u << 1, 1u << 2, 1
 static TouchState touch;
 static int touch_hidden;       /* a gamepad is in use: the drawn buttons are out of the way */
 static int screen_w, screen_h;  /* in pixels */
+static Uint64 awake, busy, report_start;  /* for the frame rate report */
+static unsigned report_frames;
 
 /* stdout and stderr go nowhere on Android: a thread passes their lines to logcat. */
 static void *forward_output(void *pipe_end)
@@ -187,6 +195,25 @@ static void draw_buttons(uint16_t keys)
         }
     }
 }
+
+/* Every 600 frames (ten seconds): how many frames a second came, and how long the game
+ * took a frame (the rest of the frame's time goes to waiting for the next one). `waited`
+ * is when this frame's wait began; `awake`, when the last one ended. */
+static void report_rate(Uint64 waited)
+{
+    if (awake)
+        busy += waited - awake;
+    if (report_frames == 0)
+        report_start = waited;
+    if (++report_frames == 601) {
+        double seconds = (double)(waited - report_start) / 1e9;
+        printf("%.2f frames a second; the game took %.1f ms a frame\n", 600 / seconds,
+               (double)busy / 600 / 1e6);
+        report_frames = 1;
+        report_start = waited;
+        busy = 0;
+    }
+}
 #endif
 
 static void handle(const SDL_Event *event)
@@ -226,6 +253,31 @@ static void handle(const SDL_Event *event)
     }
 #endif
 }
+
+#if MOBILE
+/* The app's comings and goings. SDL passes them to watchers only, as they happen, on the
+ * game's thread (the one pumping the events); in the background the next pump waits
+ * until the app comes back, so the game is paused. */
+static bool on_app_event(void *user, SDL_Event *event)
+{
+    (void)user;
+    switch (event->type) {
+    case SDL_EVENT_WILL_ENTER_BACKGROUND:  /* Android may kill the app from now on */
+    case SDL_EVENT_TERMINATING:
+        host_store_save(&options, &rt);
+        touch.count = 0;  /* the fingers on the screen now will not come up here */
+        break;
+    case SDL_EVENT_DID_ENTER_FOREGROUND:
+        paced = 0;  /* the clocks stood still: do not rush to catch up */
+        awake = 0;
+        report_frames = 0;
+        break;
+    default:
+        break;
+    }
+    return true;
+}
+#endif
 
 /* The keys held on the keyboard, the gamepad, the touch screen and in the script. */
 static uint16_t held_keys(void)
@@ -300,7 +352,14 @@ static void on_frame(GbaRuntime *rt, void *user)
     gba_screen(rt, pixels);
     present();
     SDL_RenderPresent(renderer);
+#if MOBILE
+    Uint64 waited = SDL_GetTicksNS();
     pace();
+    report_rate(waited);
+    awake = SDL_GetTicksNS();
+#else
+    pace();
+#endif
     host_frame(&options, rt);
     play_sound();
     gba_set_keys(rt, held_keys());
@@ -332,6 +391,7 @@ static int on_stopped(GbaRuntime *rt, void *user)
     }
     if (options.frame_limit)  /* a run limited by --frames is scripted: end it, as headless */
         return 0;
+    host_store_save(&options, rt);  /* nothing changes it until a key wakes the game */
     uint16_t before = held_keys();
     while (!closed) {
         SDL_Event event;
@@ -385,6 +445,7 @@ static int open_window(void)
 #if MOBILE
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_PIXELART);  /* any size, still crisp */
     lay_out();
+    SDL_AddEventWatch(on_app_event, NULL);
 #else
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
 #endif
@@ -423,7 +484,6 @@ static void screenshot(void)
 
 int main(int argc, char **argv)
 {
-    static GbaRuntime rt;
     GbaHost host = {on_frame, on_log, on_diag, on_stopped, NULL};
     options.window = 1;
 #if MOBILE

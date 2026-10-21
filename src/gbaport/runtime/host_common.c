@@ -125,7 +125,7 @@ static int replace_file(const char *from, const char *to)
 
 /* Writes the save next to its file, then puts it in place: a crash or a failed write
  * leaves the previous save as it was. */
-static void store_save(HostOptions *o, GbaRuntime *rt)
+void host_store_save(HostOptions *o, GbaRuntime *rt)
 {
     uint32_t size;
     uint8_t *data = gba_save_data(rt, &size);
@@ -389,7 +389,7 @@ void host_frame(HostOptions *o, GbaRuntime *rt)
     while (o->next_press < o->press_count && o->presses[o->next_press].frame <= rt->frames)
         o->script_keys = o->presses[o->next_press++].keys;
     if (rt->frames % 60 == 0)
-        store_save(o, rt);
+        host_store_save(o, rt);
     if (o->frame_limit && rt->frames >= o->frame_limit)
         gba_end(rt, GBA_END_HOST);
 }
@@ -404,7 +404,7 @@ int host_script_wake(HostOptions *o)
 
 int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
 {
-    store_save(o, rt);
+    host_store_save(o, rt);
     FILE *f = o->audio_file;
     if (f) {
         o->sound_count = gba_audio_take(rt, o->sound, GBA_SOUND_BUFFER);

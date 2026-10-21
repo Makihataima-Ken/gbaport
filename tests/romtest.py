@@ -195,6 +195,19 @@ def run_program(command: list[str], env: dict[str, str] | None = None) -> subpro
     raise AssertionError("unreachable")
 
 
+def start_program(command: list[str], env: dict[str, str] | None = None) -> subprocess.Popen:
+    """Start a native program without waiting for it (retried as run_program is)."""
+    for attempt in range(5):
+        try:
+            return subprocess.Popen(command, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, env=env)
+        except OSError as error:
+            if getattr(error, "winerror", None) != 4551 or attempt == 4:
+                raise
+            time.sleep(2)
+    raise AssertionError("unreachable")
+
+
 def run_rom(
     rom: TestRom, *, frames: int = 600, rom_file: bytes | None = None, save: Path | None = None,
     host: str = "headless", args: tuple[str, ...] = (), env: dict[str, str] | None = None,

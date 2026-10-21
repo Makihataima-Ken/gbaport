@@ -1,7 +1,8 @@
 import os
+import time
 
 import pytest
-from romtest import build_test_rom, run_rom, run_test
+from romtest import build_test_rom, native_program, run_rom, run_test, start_program
 
 from gbaport.analysis.analyze import analyze_rom
 from gbaport.analysis.config import parse_config
@@ -110,3 +111,23 @@ def test_the_save_type_comes_from_game_toml_or_the_library_id():
     configured = parse_config('[rom]\nsave = "flash128k"\n' + rom.config)
     assert analyze_rom(image, configured).save is SaveType.FLASH128K
     assert "gba_save_type = 3u;  /* flash128k */" in rom_identity(rom.data, SaveType.FLASH128K)
+
+
+def test_the_window_host_stores_the_save_when_the_game_stops(tmp_path):
+    """Stopped, a game changes nothing until a key wakes it: its save is stored then, so a
+    program killed while waiting (a phone's app is killed in the background) keeps it."""
+    rom = build_test_rom("save_sram")  # writes its save, then stops at once
+    (tmp_path / "game.gba").write_bytes(rom.data)
+    save = tmp_path / "game.sav"
+    env = {**os.environ, "SDL_VIDEO_DRIVER": "dummy", "SDL_AUDIO_DRIVER": "dummy"}
+    command = [str(native_program(rom, "sdl")), str(tmp_path / "game.gba"), "--save", str(save)]
+    process = start_program(command, env)
+    try:
+        deadline = time.monotonic() + 30
+        while not save.exists() and process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert process.poll() is None, "the program waits for a key"
+        assert save.read_bytes()[0x100:0x108] == SIGNATURE
+    finally:
+        process.kill()
+        process.wait()

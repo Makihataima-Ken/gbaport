@@ -74,6 +74,52 @@ def test_the_buttons_on_the_screen_press_the_keys(phone):
     phone.stop(APP)
 
 
+def counts(phone: Device) -> list[int]:
+    """The save_counter ROM's counts so far."""
+    return [int(m.group(1)) for line in phone.log() if (m := re.fullmatch(r"COUNT (\d+)", line))]
+
+
+def test_the_save_survives_the_app_being_killed(phone):
+    launch(phone, "save_counter")
+    phone.wait_for(r"^COUNT 100$")
+    time.sleep(1.5)  # the save is stored once a second while it changes
+    phone.stop(APP)
+    last = counts(phone)[-1]
+    phone.clear_log()
+    phone.start(APP)
+    saved = int(phone.wait_for(r"^SAVED (\d+)$").group(1))
+    assert last - 61 <= saved <= last  # a second's counts at most are lost
+    phone.stop(APP)
+
+
+def test_going_to_the_background_stores_the_save_and_pauses_the_game(phone):
+    launch(phone, "save_counter")
+    phone.wait_for(r"^COUNT 150$")
+    phone.key("KEYCODE_HOME")
+    time.sleep(2)
+    paused = counts(phone)
+    time.sleep(2)
+    assert counts(phone) == paused  # no frames in the background
+    phone.stop(APP)  # Android kills apps in the background when it needs their memory
+    phone.clear_log()
+    phone.start(APP)
+    assert int(phone.wait_for(r"^SAVED (\d+)$").group(1)) == paused[-1]
+    phone.stop(APP)
+
+
+def test_the_app_keeps_the_gbas_frame_rate_and_says_so(phone):
+    launch(phone, "keys_log")
+    rate = r"^([\d.]+) frames a second; the game took ([\d.]+) ms a frame$"
+    phone.wait_for(rate, timeout=30)
+    deadline = time.monotonic() + 30
+    while len(rates := [re.match(rate, line) for line in phone.log() if re.match(rate, line)]) < 2:
+        assert time.monotonic() < deadline
+        time.sleep(1)
+    assert 59.2 <= float(rates[1].group(1)) <= 60.2  # the first ten seconds hold the start-up
+    assert float(rates[1].group(2)) < 16.7
+    phone.stop(APP)
+
+
 def test_build_installs_the_app_on_the_device_and_starts_it(phone, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ANDROID_SERIAL", phone.serial)  # a phone may be connected too
     rom = build_test_rom("hello")
