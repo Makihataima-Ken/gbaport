@@ -99,6 +99,16 @@ class Device:
         """Deletes the app's files, its save among them."""
         self.shell("pm", "clear", app)
 
+    def put_file(self, app: str, path: Path) -> str:
+        """Copies ``path`` into the app's own storage (its debug build lets adb in);
+        returns its name there, for the app's command line."""
+        staged = f"/data/local/tmp/gbaport-{path.name}"
+        self.adb("push", str(path), staged)
+        self.shell("run-as", app, "mkdir", "-p", "files")
+        self.shell("run-as", app, "cp", staged, f"files/{path.name}")
+        self.shell("rm", staged)
+        return f"/data/user/0/{app}/files/{path.name}"
+
     def running(self, app: str) -> bool:
         return bool(self.adb("shell", f"pidof {shlex.quote(app)} || true").strip())
 

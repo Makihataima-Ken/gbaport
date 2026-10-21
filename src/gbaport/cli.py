@@ -310,6 +310,11 @@ def _add_build_command(commands) -> None:
         action="store_true",
         help="android: install the app on the connected phone (USB debugging on) and start it",
     )
+    build.add_argument(
+        "--input",
+        help="android, with --install: the input file the game plays this time "
+        "(see gbaport/inputs.py)",
+    )
     build.set_defaults(handler=_run_build)
 
 
@@ -319,6 +324,10 @@ def _run_build(args: argparse.Namespace) -> int:
     root = Path(args.out) if args.out else Path("games") / game_code
     if args.host != "android" and (args.abi or args.install):
         raise ValueError("--abi and --install are for --host android")
+    if args.input and not args.install:
+        raise ValueError("--input is for --install: the game plays it on the device")
+    if args.input:
+        load_input(args.input)  # a bad input file stops here, with its line
     device = the_device() if args.install else None  # before the long build: is one there?
     _recompile(args, rom, root / "generated")
     if args.host == "android":
@@ -346,9 +355,18 @@ def _build_android(args: argparse.Namespace, rom: RomImage, root: Path, device) 
     if device is None:
         print(f"install it with --install, or: {sdk / 'platform-tools' / 'adb'} install -r {apk}")
         return 0
+    app = application_id(header.game_code)
     device.install(apk)
-    device.start(application_id(header.game_code))
-    print(f"installed it on {device.serial} and started it")
+    device.stop(app)  # a fresh start, even if an older build is running
+    options = ""
+    if args.input:  # the presses as Python reads them (see gbaport/verify.py)
+        with tempfile.TemporaryDirectory() as folder:
+            canonical = Path(folder) / "game.input"
+            canonical.write_text(format_input(load_input(args.input)), encoding="utf-8")
+            options = f"--input {device.put_file(app, canonical)}"
+    device.start(app, options)
+    print(f"installed it on {device.serial} and started it"
+          + (f", playing {args.input}" if args.input else ""))
     return 0
 
 

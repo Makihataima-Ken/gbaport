@@ -88,3 +88,12 @@ def test_abi_and_install_are_for_android_only(tmp_path, capsys, option):
     printed = capsys.readouterr()
     assert "--abi and --install are for --host android" in printed.err
     assert "functions" not in printed.out  # it stopped before recompiling
+
+
+def test_an_input_file_is_for_install(tmp_path, capsys):
+    rom_path = tmp_path / "hello.gba"
+    rom_path.write_bytes(build_test_rom("hello").data)
+    (tmp_path / "game.input").write_text("10 A\n", encoding="utf-8")
+    command = ["build", str(rom_path), "--host", "android", "--input", str(tmp_path / "game.input")]
+    assert main(command) == 1
+    assert "--input is for --install" in capsys.readouterr().err

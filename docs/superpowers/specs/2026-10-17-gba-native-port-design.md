@@ -127,8 +127,11 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
   32768 Hz and resampled to the device rate.
 - **Saves.** SRAM, Flash (with its command state machine) and EEPROM (serial protocol over
   DMA) modelled at the memory-access level, because game code drives the chip protocol
-  directly. Persisted to a file per game.
-- **Input.** Touch overlay and game controllers write `KEYINPUT`.
+  directly. Persisted to a file per game: once a second while it changes, when the game
+  stops, at the end, and on a phone when the app goes to the background, where the
+  system may kill it (Plan 8).
+- **Input.** Touch overlay and game controllers write `KEYINPUT`. On a phone the
+  buttons are drawn over the picture, held sideways, and a gamepad hides them (Plan 8).
 
 ## Per-game configuration
 
@@ -170,6 +173,7 @@ CpuSet is detected and needs a `[[ram_code]]` entry only when detection misses i
 | Lifter (Plan 3) | Unicorn (ARM926 model, pre-ARMv6 semantics) | Per-instruction differential tests with random operands; snippet end-state equality |
 | Runtime (Plans 4–6) | Self-built test ROMs (clang `--target=armv4t-none-eabi` + `ld.lld`) and public GBA test suites (licence checked before vendoring) | Expected outputs and reference images |
 | Whole game (Plan 7+) | mGBA (dev only) | Per-frame framebuffer and RAM comparison on recorded input sequences |
+| Android (Plan 8) | Test ROMs on the Android emulator (dev only) | The app runs them; drawn buttons press keys; saves survive the app being killed; the frame rate holds |
 | Decomp (Plan 10) | The recompiled function | Same inputs/state → same outputs/state, on states captured from real play |
 
 ## Roadmap
@@ -208,7 +212,12 @@ Needed later:
   build with clang directly.
 - SDL3 3.4.18 (fetched by CMake `FetchContent`, built once as a static library into the
   user's cache folder) — Plan 4c.
-- Android SDK + NDK r27 or newer (Android Studio or `sdkmanager`) — Plan 8.
+- The Android SDK, fetched by gbaport into the cache folder (Plan 8): Google's
+  command-line tools 23.0, then platform 35, build tools 35.0.0, NDK r29 (29.0.14206865)
+  and CMake 3.31.6 through their `sdkmanager`, which accepts Google's Android SDK licence;
+  for the tests, the emulator and an Android 15 x86_64 system image (Windows Hypervisor
+  Platform). Gradle 8.12.1 with the Android Gradle plugin 8.7.3, as SDL3's android-project
+  uses, on a JDK 17 or newer; SDL3 3.4.18's source for the app's SDL3 and Java code.
 - macOS with Xcode 16 or newer, or a macOS CI runner, plus an Apple developer account — Plan 9.
 - Ghidra (check the release's required JDK; recent releases need a newer JDK than 17) — Plan 10.
 - mGBA 0.10 or newer with its GDB server, dev machine only (`gbaport trace`) — Plan 2b.

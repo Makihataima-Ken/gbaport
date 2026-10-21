@@ -120,16 +120,37 @@ def test_the_app_keeps_the_gbas_frame_rate_and_says_so(phone):
     phone.stop(APP)
 
 
-def test_build_installs_the_app_on_the_device_and_starts_it(phone, tmp_path, monkeypatch, capsys):
+def build_and_install(phone, tmp_path, monkeypatch, rom_name: str, *options: str) -> str:
+    """gbaport build --host android --install, onto the emulator; what it printed."""
     monkeypatch.setenv("ANDROID_SERIAL", phone.serial)  # a phone may be connected too
-    rom = build_test_rom("hello")
-    (tmp_path / "hello.gba").write_bytes(rom.data)
+    rom = build_test_rom(rom_name)
+    (tmp_path / "game.gba").write_bytes(rom.data)
     (tmp_path / "game.toml").write_text(rom.config, encoding="utf-8")
-    phone.stop(APP)
     phone.clear_log()
     out = FOLDER / "cli"  # kept between runs: Gradle compiles only what changed
-    assert main(["build", str(tmp_path / "hello.gba"), "--config", str(tmp_path / "game.toml"),
-                 "--host", "android", "--install", "--out", str(out)]) == 0
-    assert f"built {out / 'build' / 'ATST.apk'} (x86_64)" in capsys.readouterr().out
+    assert main(["build", str(tmp_path / "game.gba"), "--config", str(tmp_path / "game.toml"),
+                 "--host", "android", "--install", "--out", str(out), *options]) == 0
+    return str(out)
+
+
+def test_build_installs_the_app_on_the_device_and_starts_it(phone, tmp_path, monkeypatch, capsys):
+    out = build_and_install(phone, tmp_path, monkeypatch, "hello")
+    printed = capsys.readouterr().out
+    assert f"built {out}" in printed and "ATST.apk (x86_64)" in printed  # the device's processor
+    assert f"installed it on {phone.serial} and started it" in printed
     phone.wait_for(r"^DONE 1 passed, 0 failed$")
+    phone.stop(APP)
+
+
+def test_build_has_the_game_play_an_input_file_on_the_device(phone, tmp_path, monkeypatch):
+    (tmp_path / "presses.input").write_text("﻿# A, then nothing\r\n120 A\r\n150 none\r\n",
+                                            encoding="utf-8")
+    build_and_install(phone, tmp_path, monkeypatch, "keys_log", "--input",
+                      str(tmp_path / "presses.input"))
+    phone.wait_for(r"^KEYS A$")
+    deadline = time.monotonic() + 10
+    while (keys := [line for line in phone.log() if line.startswith("KEYS")]) != \
+            ["KEYS none", "KEYS A", "KEYS none"]:
+        assert time.monotonic() < deadline, keys
+        time.sleep(0.5)
     phone.stop(APP)

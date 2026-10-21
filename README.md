@@ -36,6 +36,13 @@ that differs is written next to mGBA's in `gbaport-romcache/pictures`, a sound t
 differs next to mGBA's in `gbaport-romcache/sounds` (WAV files), and the test's message
 names the files.
 
+The Android tests build test ROMs' apps (the first run fetches what `gbaport build --host
+android` needs, below) and run them on gbaport's own Android emulator: a 720x1280 phone
+(Android 15, x86_64) with no window and no sound, drawn by the PC's graphics card and run
+by Windows Hypervisor Platform. The tests boot it when it is not running (a minute or two;
+it lives in `%LOCALAPPDATA%\gbaport\android-avd`) and shut it down after them. Run them
+one test run at a time: two runs would drive the same emulator and app.
+
 ## Commands
 
     uv run gbaport info roms/mygame.gba [--json]
@@ -45,6 +52,7 @@ names the files.
     uv run gbaport trace roms/mygame.gba [--port 2345] [--seconds 600]
     uv run gbaport recompile roms/mygame.gba [--out games/XXXX/generated]
     uv run gbaport build roms/mygame.gba [--config games/XXXX/game.toml] [--out games/XXXX]
+    uv run gbaport build roms/mygame.gba --host android [--abi x86_64] [--install [--input FILE]]
     uv run gbaport verify roms/mygame.gba [--frames 600] [--input FILE] [--slack 1]
 
 If Windows Application Control blocks the `gbaport.exe` launcher, run the same commands
@@ -98,8 +106,9 @@ arguments, a different ROM or an unusable save file; 3 for a runtime error; 4 wh
 The game's save chip (SRAM, Flash or EEPROM, as its library ID string or `game.toml`'s
 `[rom] save` says) lives in a save file: `--save PATH`, by default the ROM's path with
 `.sav` (`roms/mygame.sav`, which git ignores). It is written once a second while the game
-changes it and again when the program ends, also after a runtime error. A save file of
-the wrong size is refused and left as it is.
+changes it, when the game stops (the BIOS Stop call, in the window), and again when the
+program ends, also after a runtime error. A save file of the wrong size is refused and
+left as it is.
 
 Windows' Smart App Control judges every newly built program by its content and refuses
 some of them for good ("An Application Control policy has blocked this file"). `gbaport
@@ -128,6 +137,57 @@ wait states WAITCNT sets for the memory it runs from, data accesses cost their m
 wait states (through mGBA's model of the cartridge's prefetch buffer), and DMA and the
 EEPROM take as long as in mGBA. So the game reaches each picture when it does in mGBA,
 give or take a frame where an interrupt comes in at a loop or a return instead of at once.
+
+## Playing on an Android phone
+
+    uv run python -m gbaport.cli build roms/mygame.gba --host android --install
+
+builds the game's app, installs it on the phone connected over USB and starts it. Turn on
+USB debugging in the phone's developer options first, and allow this computer when the
+phone asks. Without `--install`, the command builds `games/<game_code>/build/<game_code>.apk`
+for phones (arm64-v8a; `--abi x86_64` builds it for the Android emulator on a PC); with
+`--install` it builds for the connected device's processor. With several devices
+connected, `ANDROID_SERIAL` names the one to use. `--input FILE`, with `--install`, has
+the game play an input file this time. The app is `org.gbaport.<game_code>`, named with
+the cartridge's title, and each build replaces the last.
+
+The first Android build fetches about 4 GB into `%LOCALAPPDATA%\gbaport`:
+- **The Android SDK** (`android-sdk`): Google's command-line tools and, through them, the
+  Android 15 platform (API 35), build tools 35.0.0, NDK r29 and CMake 3.31.6. Installing
+  them accepts Google's Android SDK licence (https://developer.android.com/studio/terms),
+  which gbaport says when it does.
+- **Gradle 8.12.1**, and through it the Android Gradle plugin 8.7.3 (`gradle-home`).
+  Gradle needs a JDK 17 or newer (`JAVA_HOME`, or `java` on the PATH).
+- **SDL3 3.4.18's source**, which the app builds SDL3 from.
+
+The NDK's clang compiles a large game's code for minutes the first time (Dragon Ball GT
+Transformation: about five); later builds compile only what changed. The Gradle project
+stays in `games/<game_code>/build/android`, and Android Studio can open it.
+
+The app is the window host built for Android, with the ROM inside it. It fills the
+screen, held sideways, and draws the GBA's buttons over the picture:
+- the D-pad on the left: slide a finger around it; a finger that came down on it keeps
+  steering it wherever it goes;
+- A and B on the right (a finger between them holds both);
+- L and R in the top corners, Select and Start at the bottom.
+
+A gamepad works as on the desktop. Pressing one of its buttons hides the drawn ones, and
+touching the screen brings them back. The back button leaves the app as the home button
+does.
+
+The save lives in the app's own storage. It is stored once a second while the game
+changes it, when the game stops (the BIOS Stop call), when the app goes to the
+background, where Android may kill it at any time, and when the app ends. In the
+background the game is paused. Uninstalling the app deletes its save.
+
+What the game and the runtime print goes to Android's log, with the frame rate every ten
+seconds:
+
+    %LOCALAPPDATA%\gbaport\android-sdk\platform-tools\adb logcat -s gbaport
+
+    59.73 frames a second; the game took 3.1 ms a frame
+
+A runtime error shows its message on the screen; the app ends when it is closed.
 
 ## Checking a game against mGBA
 
