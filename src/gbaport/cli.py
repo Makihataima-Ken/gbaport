@@ -15,8 +15,15 @@ from gbaport.inputs import format_input, load_input
 from gbaport.isa.model import Mode
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.android import ABIS as ANDROID_ABIS
-from gbaport.native.android import android_project, android_sdk, build_apk, sdl3_source
+from gbaport.native.android import (
+    android_project,
+    android_sdk,
+    application_id,
+    build_apk,
+    sdl3_source,
+)
 from gbaport.native.build import HOSTS, compile_native, generated_sources, write_sources
+from gbaport.native.device import the_device
 from gbaport.native.mgba import run_mgba
 from gbaport.rom.header import parse_header
 from gbaport.rom.image import ROM_BASE, RomImage
@@ -295,8 +302,13 @@ def _add_build_command(commands) -> None:
         action="append",
         choices=ANDROID_ABIS,
         default=[],
-        help="android: a processor to build for (repeatable; default arm64-v8a, which phones "
-        "have; the emulator on a PC is x86_64)",
+        help="android: a processor to build for (repeatable; default: the device's with "
+        "--install, else arm64-v8a, which phones have; the emulator on a PC is x86_64)",
+    )
+    build.add_argument(
+        "--install",
+        action="store_true",
+        help="android: install the app on the connected phone (USB debugging on) and start it",
     )
     build.set_defaults(handler=_run_build)
 
@@ -305,11 +317,12 @@ def _run_build(args: argparse.Namespace) -> int:
     rom = RomImage.load(args.rom)
     game_code = parse_header(rom).game_code or "game"
     root = Path(args.out) if args.out else Path("games") / game_code
-    if args.host != "android" and args.abi:
-        raise ValueError("--abi is for --host android")
+    if args.host != "android" and (args.abi or args.install):
+        raise ValueError("--abi and --install are for --host android")
+    device = the_device() if args.install else None  # before the long build: is one there?
     _recompile(args, rom, root / "generated")
     if args.host == "android":
-        return _build_android(args, rom, root)
+        return _build_android(args, rom, root, device)
     name = game_code if args.host == "sdl" else f"{game_code}-{args.host}"
     program = compile_native(root / "generated", root / "build", name, args.host)
     print(f"built {program}")
@@ -317,16 +330,25 @@ def _run_build(args: argparse.Namespace) -> int:
     return 0
 
 
-def _build_android(args: argparse.Namespace, rom: RomImage, root: Path) -> int:
-    """The game's app: its Gradle project in <root>/build/android, the APK next to it."""
+def _build_android(args: argparse.Namespace, rom: RomImage, root: Path, device) -> int:
+    """The game's app: its Gradle project in <root>/build/android, the APK next to it;
+    installed on ``device`` and started, if there is one."""
     header = parse_header(rom)
-    abis = tuple(dict.fromkeys(args.abi)) or ("arm64-v8a",)
+    abis = tuple(dict.fromkeys(args.abi)) or ((device.abi(),) if device else ("arm64-v8a",))
+    if abis[0] not in ANDROID_ABIS:
+        raise ValueError(f"{device.serial} runs {abis[0]} code; gbaport builds for "
+                         f"{' and '.join(ANDROID_ABIS)}")
     sdk = android_sdk()
     project = android_project(root / "generated", rom.data, root / "build" / "android",
                               header.game_code, header.title, abis, sdl3_source(), sdk)
     apk = build_apk(project, root / "build" / f"{header.game_code or 'game'}.apk")
     print(f"built {apk} ({', '.join(abis)})")
-    print(f"install it with: {sdk / 'platform-tools' / 'adb'} install -r {apk}")
+    if device is None:
+        print(f"install it with --install, or: {sdk / 'platform-tools' / 'adb'} install -r {apk}")
+        return 0
+    device.install(apk)
+    device.start(application_id(header.game_code))
+    print(f"installed it on {device.serial} and started it")
     return 0
 
 

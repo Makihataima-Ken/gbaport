@@ -1,5 +1,6 @@
 import os
 
+import pytest
 from romtest import build_test_rom, run_program
 
 from gbaport import cli
@@ -79,8 +80,11 @@ def test_build_for_android_takes_the_processors_asked_for(tmp_path, monkeypatch)
     assert asked["abis"] == ("x86_64", "arm64-v8a")
 
 
-def test_abi_is_for_android_only(tmp_path, capsys):
+@pytest.mark.parametrize("option", [["--abi", "x86_64"], ["--install"]])
+def test_abi_and_install_are_for_android_only(tmp_path, capsys, option):
     rom_path = tmp_path / "hello.gba"
     rom_path.write_bytes(build_test_rom("hello").data)
-    assert main(["build", str(rom_path), "--host", "headless", "--abi", "x86_64"]) == 1
-    assert "--abi is for --host android" in capsys.readouterr().err
+    assert main(["build", str(rom_path), "--host", "headless", *option]) == 1
+    printed = capsys.readouterr()
+    assert "--abi and --install are for --host android" in printed.err
+    assert "functions" not in printed.out  # it stopped before recompiling

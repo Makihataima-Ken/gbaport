@@ -25,4 +25,13 @@ public class GameActivity extends SDLActivity {
             arguments.addAll(Arrays.asList(extra.trim().split("[ \\t]+")));
         return arguments.toArray(new String[0]);
     }
+
+    /* SDL keeps the process once main() has returned, and will not run main() in it again:
+     * once the game has ended, the process ends too, so that the next start is a fresh one. */
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (isFinishing())
+            System.exit(0);
+    }
 }

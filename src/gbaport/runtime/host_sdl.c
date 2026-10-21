@@ -17,7 +17,13 @@
  * samples (32768 a second) and converts them to the device's rate. About three frames'
  * worth wait in it; when the device's clock and the frame pacing drift apart, the stream
  * plays up to 1% faster or slower to keep it so. Without a sound device the game runs
- * silent (one warning); with --fast it runs silent too. */
+ * silent (one warning); with --fast it runs silent too.
+ *
+ * On a phone (Android) the picture fills the screen, held sideways, as large as it fits
+ * (touch.c lays it out). The ROM is the app's asset game.gba and the save file lives in
+ * the app's own storage. Everything the game and the runtime print goes to the system
+ * log (logcat, tag "gbaport"); a run that ends with an error shows it before the app
+ * closes. The options come from the app's intent (GameActivity.java). */
 #include <stdio.h>
 #include <string.h>
 
@@ -25,6 +31,17 @@
 #include <SDL3/SDL_main.h>
 
 #include "host_common.h"
+
+#if defined(SDL_PLATFORM_ANDROID)
+#define MOBILE 1
+#include <android/log.h>
+#include <pthread.h>
+#include <unistd.h>
+
+#include "touch.h"
+#else
+#define MOBILE 0
+#endif
 
 #define FRAME_NS 16742706u  /* 280896 cycles at 16.78 MHz: 16742706 + 153/512 ns */
 
@@ -52,6 +69,49 @@ static const SDL_GamepadButton BUTTONS[10] = {
     SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER,
 };
 
+#if MOBILE
+static TouchState touch;
+static int screen_w, screen_h;  /* in pixels */
+
+/* stdout and stderr go nowhere on Android: a thread passes their lines to logcat. */
+static void *forward_output(void *pipe_end)
+{
+    FILE *output = fdopen((int)(intptr_t)pipe_end, "r");
+    char line[1024];
+    while (output && fgets(line, sizeof line, output)) {
+        line[strcspn(line, "\n")] = 0;
+        __android_log_write(ANDROID_LOG_INFO, "gbaport", line);
+    }
+    return NULL;
+}
+
+static void output_to_log(void)
+{
+    int ends[2];
+    pthread_t thread;
+    if (pipe(ends) != 0)
+        return;
+    dup2(ends[1], 1);
+    dup2(ends[1], 2);
+    setvbuf(stdout, NULL, _IOLBF, 0);
+    setvbuf(stderr, NULL, _IOLBF, 0);
+    if (pthread_create(&thread, NULL, forward_output, (void *)(intptr_t)ends[0]) == 0)
+        pthread_detach(thread);
+}
+
+/* The screen's size and safe area (clear of notches and system bars) in pixels. */
+static void lay_out(void)
+{
+    SDL_GetWindowSizeInPixels(window, &screen_w, &screen_h);
+    float density = SDL_GetWindowPixelDensity(window);
+    SDL_Rect safe;
+    if (!SDL_GetWindowSafeArea(window, &safe) || safe.w <= 0 || safe.h <= 0)
+        safe = (SDL_Rect){0, 0, (int)(screen_w / density), (int)(screen_h / density)};
+    touch_layout(&touch.layout, (float)screen_w, (float)screen_h,
+                 (TouchBox){safe.x * density, safe.y * density, safe.w * density, safe.h * density});
+}
+#endif
+
 static void handle(const SDL_Event *event)
 {
     if (event->type == SDL_EVENT_QUIT)
@@ -63,6 +123,11 @@ static void handle(const SDL_Event *event)
         SDL_CloseGamepad(gamepad);
         gamepad = NULL;
     }
+#if MOBILE
+    else if (event->type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED ||
+             event->type == SDL_EVENT_WINDOW_SAFE_AREA_CHANGED)
+        lay_out();
+#endif
 }
 
 /* The keys held on the keyboard, the gamepad and in the script. */
@@ -87,7 +152,12 @@ static void present(void)
     SDL_UpdateTexture(texture, NULL, pixels, GBA_SCREEN_WIDTH * 4);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
+#if MOBILE
+    TouchBox s = touch.layout.screen;
+    SDL_RenderTexture(renderer, texture, NULL, &(SDL_FRect){s.x, s.y, s.w, s.h});
+#else
     SDL_RenderTexture(renderer, texture, NULL, NULL);
+#endif
 }
 
 /* Waits until this frame's time has come; after falling behind by more than a few
@@ -187,20 +257,31 @@ static int open_window(void)
         memcpy(name, options.rom + 0xA0, 12);
         snprintf(title, sizeof title, "%s - gbaport", name);
     }
+#if MOBILE
+    if (!SDL_CreateWindowAndRenderer(title, 0, 0, SDL_WINDOW_FULLSCREEN, &window, &renderer)) {
+#else
     int w = GBA_SCREEN_WIDTH * options.scale, h = GBA_SCREEN_HEIGHT * options.scale;
     if (!SDL_CreateWindowAndRenderer(title, w, h, SDL_WINDOW_RESIZABLE, &window, &renderer)) {
+#endif
         fprintf(stderr, "error: cannot open a window: %s\n", SDL_GetError());
         return -1;
     }
+#if !MOBILE
     SDL_SetRenderLogicalPresentation(renderer, GBA_SCREEN_WIDTH, GBA_SCREEN_HEIGHT,
                                      SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+#endif
     texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_XRGB8888, SDL_TEXTUREACCESS_STREAMING,
                                 GBA_SCREEN_WIDTH, GBA_SCREEN_HEIGHT);
     if (!texture) {
         fprintf(stderr, "error: cannot make the screen texture: %s\n", SDL_GetError());
         return -1;
     }
+#if MOBILE
+    SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_PIXELART);  /* any size, still crisp */
+    lay_out();
+#else
     SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+#endif
     return 0;
 }
 
@@ -239,7 +320,21 @@ int main(int argc, char **argv)
     static GbaRuntime rt;
     GbaHost host = {on_frame, on_log, on_diag, on_stopped, NULL};
     options.window = 1;
+#if MOBILE
+    output_to_log();
+    char *storage = SDL_GetPrefPath("gbaport", "game");  /* the app's own storage */
+    if (storage)  /* the default save file; --save still names another */
+        snprintf(options.save_path, sizeof options.save_path, "%sgame.sav", storage);
+    SDL_free(storage);
+#endif
     int status = host_parse(&options, argc, argv);
+#if MOBILE
+    if (status == 0) {  /* the ROM is one of the app's assets, which only SDL can read */
+        size_t size = 0;
+        options.rom = SDL_LoadFile(options.rom_path, &size);
+        options.rom_size = (uint32_t)size;
+    }
+#endif
     if (status == 0)
         status = host_open(&options, &rt, &host);
     if (status != 0)
@@ -251,6 +346,10 @@ int main(int argc, char **argv)
     if (options.screenshot)
         screenshot();
     status = host_finish(&options, &rt, end);
+#if MOBILE
+    if (end == GBA_END_ERROR)  /* the app closes when main returns: say why first */
+        SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "gbaport", rt.error, window);
+#endif
     SDL_DestroyAudioStream(sound);
     SDL_Quit();
     return closed ? 0 : status;

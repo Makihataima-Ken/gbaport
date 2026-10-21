@@ -324,13 +324,13 @@ int host_parse(HostOptions *o, int argc, char **argv)
 
 int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
 {
-    uint32_t size;
-    o->rom = read_file(o->rom_path, &size);
+    if (!o->rom)  /* a phone's host has it from the app's assets */
+        o->rom = read_file(o->rom_path, &o->rom_size);
     if (!o->rom) {
         fprintf(stderr, "error: cannot read %s\n", o->rom_path);
         return 2;
     }
-    if (gba_init(rt, o->rom, size, host) != 0) {
+    if (gba_init(rt, o->rom, o->rom_size, host) != 0) {
         fprintf(stderr, "error: %s\n", rt->error);
         return 2;
     }

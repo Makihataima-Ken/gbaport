@@ -30,7 +30,8 @@ typedef struct {
     HostPress *presses;         /* from --press and --input, in frame order */
     int press_count, press_capacity, next_press;
     uint16_t script_keys;       /* what the presses so far hold */
-    uint8_t *rom;
+    uint8_t *rom;               /* the ROM (NULL: host_open reads rom_path) */
+    uint32_t rom_size;
 } HostOptions;
 
 /* Reads the command line; prints the usage and returns 2 when it is wrong. */
