@@ -1,10 +1,16 @@
-"""Android: what a game's app is built with, fetched once into the cache folder.
+"""Android: a game's app, a Gradle project built with the Android SDK and NDK.
+
+``android_project`` writes the project from ``android_template``: the game's generated C
+sources, the runtime and its window host (``host_sdl.c``, which knows phones), SDL3's
+Java code and the ROM, as an asset. ``build_apk`` builds it with Gradle into an APK signed
+with the SDK's debug key, which phones install over USB. What they need comes into the
+cache folder the first time:
 
 - **The Android SDK** (``android_sdk``): Google's command-line tools, then the platform,
   build tools, NDK and CMake that the app needs, installed with their ``sdkmanager``.
   Installing them accepts Google's Android SDK licence, which gbaport says when it does.
 - **Gradle** (``gradle``), which builds the app; it runs on a JDK 17 or newer
-  (``java_environment``).
+  (``java_environment``). Its downloads (the Android Gradle plugin) go to ``gradle-home``.
 - **SDL3's source** (``sdl3_source``): the app builds SDL3 from it and takes SDL's Java
   code for its activity.
 
@@ -23,9 +29,14 @@ import zipfile
 from collections.abc import Callable
 from pathlib import Path
 
+from gbaport.native.build import CFLAGS, RUNTIME, RUNTIME_SOURCES
 from gbaport.native.sdl3 import SDL3_SHA256, SDL3_URL, SDL3_VERSION, cache_folder
 from gbaport.native.toolchain import ToolchainError
 
+TEMPLATE = Path(__file__).parent / "android_template"
+ANDROID_PLUGIN = "8.7.3"
+HOST_SOURCES = ("host_common.c", "host_sdl.c", "touch.c")
+ABIS = ("arm64-v8a", "x86_64")  # phones; the emulator on a PC
 GRADLE_VERSION = "8.12.1"  # with the Android Gradle plugin 8.7.3, as SDL3's android-project
 GRADLE_URL = f"https://services.gradle.org/distributions/gradle-{GRADLE_VERSION}-bin.zip"
 GRADLE_SHA256 = "8d97a97984f6cbd2b85fe4c60a743440a347544bf18818048e611f5288d46c94"
@@ -161,3 +172,72 @@ def _unpack(archive: Path, top: str, target: Path) -> None:
     (staging / top).replace(target)
     shutil.rmtree(staging, ignore_errors=True)
     archive.unlink()
+
+
+def application_id(game_code: str) -> str:
+    """The app's name on the phone: org.gbaport.<game code>, so each game is its own app."""
+    code = "".join(c for c in game_code.lower() if c.isascii() and c.isalnum())
+    return f"org.gbaport.{'g' + code if code[:1].isdigit() else code or 'game'}"
+
+
+def android_project(sources: Path, rom: bytes, out: Path, game_code: str, label: str,
+                    abis: tuple[str, ...], sdl: Path, sdk: Path) -> Path:
+    """Writes the app's Gradle project to ``out``: the game's C ``sources`` (gbaport
+    recompile's folder), the runtime, SDL3's Java code from ``sdl`` and the ``rom``, built
+    for ``abis`` with the SDK in ``sdk``. Writing it again replaces what an earlier run
+    wrote, and keeps Gradle's and CMake's build folders, so a rebuild compiles only what
+    changed."""
+    main = out / "app" / "src" / "main"
+    cpp = main / "cpp"
+    for folder in (cpp / "generated", cpp / "runtime", main / "java", main / "assets", main / "res"):
+        shutil.rmtree(folder, ignore_errors=True)
+    shutil.copytree(sources, cpp / "generated")
+    (cpp / "runtime").mkdir(parents=True)
+    for path in RUNTIME.glob("*.[ch]"):
+        shutil.copy2(path, cpp / "runtime" / path.name)
+    sdl_main = sdl / "android-project" / "app" / "src" / "main"
+    shutil.copytree(sdl_main / "java", main / "java")
+    for icons in (sdl_main / "res").glob("mipmap-*"):
+        shutil.copytree(icons, main / "res" / icons.name)
+    (main / "assets").mkdir(parents=True)
+    (main / "assets" / "game.gba").write_bytes(rom)
+    units = [f"generated/{path.name}" for path in sorted((cpp / "generated").glob("*.c"))]
+    units += [f"runtime/{name}" for name in (*RUNTIME_SOURCES, *HOST_SOURCES)]
+    values = {
+        "NAME": game_code or "game", "LABEL": _xml(label or game_code or "gbaport"),
+        "ANDROID_PLUGIN": ANDROID_PLUGIN, "PLATFORM": str(PLATFORM), "BUILD_TOOLS": BUILD_TOOLS,
+        "NDK": NDK, "CMAKE": CMAKE, "APPLICATION_ID": application_id(game_code),
+        "ABIS": ", ".join(f"'{abi}'" for abi in abis), "SDL3_SOURCE": sdl.as_posix(),
+        "SOURCES": "\n".join(f"    {unit}" for unit in units), "CFLAGS": " ".join(CFLAGS),
+    }
+    for template in TEMPLATE.rglob("*"):
+        if template.is_file():
+            text = template.read_text(encoding="utf-8")
+            for key, value in values.items():
+                text = text.replace(f"@{key}@", value)
+            target = out / template.relative_to(TEMPLATE)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text, encoding="utf-8", newline="\n")
+    escaped = str(sdk).replace("\\", "\\\\").replace(":", "\\:")  # a Java properties file
+    (out / "local.properties").write_text(f"sdk.dir={escaped}\n", encoding="utf-8")
+    return out
+
+
+def _xml(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "\\'")
+
+
+def build_apk(project: Path, apk: Path, log: Log = print) -> Path:
+    """Builds ``project`` (android_project's) with Gradle; the APK is copied to ``apk``."""
+    env = {**java_environment(), "ANDROID_HOME": str(android_sdk(log)),
+           "GRADLE_USER_HOME": str(cache_folder() / "gradle-home")}
+    result = subprocess.run(
+        [str(gradle(log)), "--no-daemon", "--console=plain", "-p", str(project), "assembleDebug"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", env=env, check=False,
+    )
+    if result.returncode != 0:
+        raise ToolchainError(f"Gradle failed to build {project}:\n"
+                             f"{(result.stdout + result.stderr)[-6000:]}")
+    apk.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(project / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk", apk)
+    return apk

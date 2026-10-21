@@ -2,6 +2,7 @@ import os
 
 from romtest import build_test_rom, run_program
 
+from gbaport import cli
 from gbaport.cli import main
 
 
@@ -36,3 +37,50 @@ def test_build_makes_the_window_program_by_default(tmp_path, capsys):
     result = run_program([str(program), rom_path, "--frames", "60"], env)
     assert result.returncode == 0  # a run limited by --frames ends at Stop, as headless does
     assert result.stdout.splitlines()[-1] == "DONE 1 passed, 0 failed"
+
+
+def _android(tmp_path, monkeypatch, *options: str) -> dict:
+    """gbaport build --host android, with stand-ins for the project and the APK (the real
+    ones are built in test_android.py): what they were asked to make."""
+    asked = {}
+
+    def project(sources, rom, out, game_code, label, abis, sdl, sdk):
+        asked.update(sources=sources, rom=rom, out=out, game_code=game_code, label=label,
+                     abis=abis, sdl=sdl, sdk=sdk)
+        return out
+
+    def apk(project_folder, path, log=print):
+        asked["apk"] = path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"an APK")
+        return path
+
+    monkeypatch.setattr(cli, "android_project", project)
+    monkeypatch.setattr(cli, "build_apk", apk)
+    monkeypatch.setattr(cli, "sdl3_source", lambda: tmp_path / "sdl")
+    monkeypatch.setattr(cli, "android_sdk", lambda: tmp_path / "sdk")
+    _build(tmp_path, "--host", "android", *options)
+    return asked
+
+
+def test_build_for_android_makes_the_games_app_for_phones(tmp_path, capsys, monkeypatch):
+    asked = _android(tmp_path, monkeypatch)
+    out = tmp_path / "out"
+    assert asked["sources"] == out / "generated" and asked["out"] == out / "build" / "android"
+    assert asked["rom"] == build_test_rom("hello").data
+    assert (asked["game_code"], asked["label"], asked["abis"]) == ("ATST", "GBAPORTTEST", ("arm64-v8a",))
+    assert (asked["sdl"], asked["sdk"]) == (tmp_path / "sdl", tmp_path / "sdk")
+    assert asked["apk"] == out / "build" / "ATST.apk"
+    assert f"built {out / 'build' / 'ATST.apk'} (arm64-v8a)" in capsys.readouterr().out
+
+
+def test_build_for_android_takes_the_processors_asked_for(tmp_path, monkeypatch):
+    asked = _android(tmp_path, monkeypatch, "--abi", "x86_64", "--abi", "arm64-v8a", "--abi", "x86_64")
+    assert asked["abis"] == ("x86_64", "arm64-v8a")
+
+
+def test_abi_is_for_android_only(tmp_path, capsys):
+    rom_path = tmp_path / "hello.gba"
+    rom_path.write_bytes(build_test_rom("hello").data)
+    assert main(["build", str(rom_path), "--host", "headless", "--abi", "x86_64"]) == 1
+    assert "--abi is for --host android" in capsys.readouterr().err
