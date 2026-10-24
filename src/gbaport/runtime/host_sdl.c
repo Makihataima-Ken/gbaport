@@ -482,6 +482,18 @@ static void screenshot(void)
     SDL_DestroySurface(shot);
 }
 
+#if MOBILE
+/* The app closes when main returns: a game that cannot start says why first. */
+static int not_started(int status)
+{
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "gbaport", rt.error[0] ? rt.error :
+                             "the game cannot start: adb logcat -s gbaport says why", window);
+    return status;
+}
+#else
+#define not_started(status) (status)
+#endif
+
 int main(int argc, char **argv)
 {
     GbaHost host = {on_frame, on_log, on_diag, on_stopped, NULL};
@@ -504,9 +516,9 @@ int main(int argc, char **argv)
     if (status == 0)
         status = host_open(&options, &rt, &host);
     if (status != 0)
-        return status;
+        return not_started(status);
     if (open_window() != 0)
-        return 2;
+        return not_started(2);
     open_sound();
     GbaEnd end = gba_run(&rt);
     if (options.screenshot)

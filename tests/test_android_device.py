@@ -44,6 +44,20 @@ def test_a_runtime_error_is_printed_and_shown_until_it_is_read(phone):
     phone.stop(APP)
 
 
+def test_an_error_before_the_game_starts_is_shown_until_it_is_read(phone, tmp_path):
+    phone.install(rom_apk("save_counter"))
+    phone.stop(APP)
+    phone.clear(APP)
+    (tmp_path / "game.sav").write_bytes(b"12345")  # no save chip holds 5 bytes
+    phone.put_file(APP, tmp_path / "game.sav")  # where the app keeps its save
+    phone.clear_log()
+    phone.start(APP)
+    phone.wait_for(r"^error: \S+game\.sav: the save file has 5 bytes")
+    time.sleep(3)
+    assert phone.running(APP)  # the message waits on the screen
+    phone.stop(APP)
+
+
 def test_the_app_ends_when_the_game_does_and_starts_afresh(phone):
     launch(phone, "hello", "--frames 600")  # a run limited by --frames ends at Stop
     phone.wait_for(r"^DONE 1 passed, 0 failed$")
@@ -153,4 +167,22 @@ def test_build_has_the_game_play_an_input_file_on_the_device(phone, tmp_path, mo
             ["KEYS none", "KEYS A", "KEYS none"]:
         assert time.monotonic() < deadline, keys
         time.sleep(0.5)
+    phone.stop(APP)
+
+
+def test_an_input_file_plays_on_a_blank_save_and_leaves_the_games_own(phone, tmp_path, monkeypatch):
+    launch(phone, "save_counter")
+    phone.wait_for(r"^COUNT 100$")
+    phone.key("KEYCODE_HOME")  # stores the save
+    time.sleep(2)
+    kept = counts(phone)[-1]
+    (tmp_path / "presses.input").write_text("10 A\n", encoding="utf-8")
+    build_and_install(phone, tmp_path, monkeypatch, "save_counter", "--input",
+                      str(tmp_path / "presses.input"))
+    assert int(phone.wait_for(r"^SAVED (\d+)$").group(1)) == 0  # as it was recorded
+    phone.wait_for(r"^COUNT 100$")
+    phone.stop(APP)
+    phone.clear_log()
+    phone.start(APP)
+    assert int(phone.wait_for(r"^SAVED (\d+)$").group(1)) == kept
     phone.stop(APP)

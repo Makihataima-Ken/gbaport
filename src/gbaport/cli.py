@@ -312,8 +312,8 @@ def _add_build_command(commands) -> None:
     )
     build.add_argument(
         "--input",
-        help="android, with --install: the input file the game plays this time "
-        "(see gbaport/inputs.py)",
+        help="android, with --install: the input file the game plays this time, on a blank "
+        "save of its own (see gbaport/inputs.py)",
     )
     build.set_defaults(handler=_run_build)
 
@@ -363,7 +363,11 @@ def _build_android(args: argparse.Namespace, rom: RomImage, root: Path, device) 
         with tempfile.TemporaryDirectory() as folder:
             canonical = Path(folder) / "game.input"
             canonical.write_text(format_input(load_input(args.input)), encoding="utf-8")
-            options = f"--input {device.put_file(app, canonical)}"
+            played = device.put_file(app, canonical)
+        # input files are recorded from power-on with a blank save: this one plays on a
+        # blank save of its own, and the game's save is left as it was
+        device.shell("run-as", app, "rm", "-f", "files/input.sav")
+        options = f"--input {played} --save {played.rsplit('/', 1)[0]}/input.sav"
     device.start(app, options)
     print(f"installed it on {device.serial} and started it"
           + (f", playing {args.input}" if args.input else ""))

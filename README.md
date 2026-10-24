@@ -148,8 +148,10 @@ phone asks. Without `--install`, the command builds `games/<game_code>/build/<ga
 for phones (arm64-v8a; `--abi x86_64` builds it for the Android emulator on a PC); with
 `--install` it builds for the connected device's processor. With several devices
 connected, `ANDROID_SERIAL` names the one to use. `--input FILE`, with `--install`, has
-the game play an input file this time. The app is `org.gbaport.<game_code>`, named with
-the cartridge's title, and each build replaces the last.
+the game play an input file this time, from power-on on a blank save of its own
+(`input.sav`) as input files are recorded: the game's own save is left as it was. The app
+is `org.gbaport.<game_code>`, named with the cartridge's title, and each build replaces
+the last.
 
 The first Android build fetches about 4 GB into `%LOCALAPPDATA%\gbaport`:
 - **The Android SDK** (`android-sdk`): Google's command-line tools and, through them, the
@@ -187,7 +189,8 @@ seconds:
 
     59.73 frames a second; the game took 3.1 ms a frame
 
-A runtime error shows its message on the screen; the app ends when it is closed.
+A runtime error, or one that stops the game from starting (a save file of the wrong
+size), shows its message on the screen; the app ends when it is closed.
 
 ## Checking a game against mGBA
 
