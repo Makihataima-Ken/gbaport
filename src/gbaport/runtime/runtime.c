@@ -170,10 +170,10 @@ GbaFn gba_missing(GbaCtx *ctx, uint32_t addr)
         }
     int thumb = addr & 1;
     gba_fail(gba_rt(ctx),
-             "no recompiled code at 0x%08x (%s state, lr = 0x%08x): add it to game.toml "
-             "[code] %s, or record a trace",
+             "no recompiled code at 0x%08x (%s state, lr = 0x%08x, frame %lu): gbaport "
+             "learn finds it from a recording of play, or add it to game.toml [code] %s",
              (unsigned)(addr & ~1u), thumb ? "Thumb" : "ARM", (unsigned)ctx->r[14],
-             thumb ? "thumb_entries" : "entries");
+             (unsigned long)gba_rt(ctx)->frames, thumb ? "thumb_entries" : "entries");
     return 0;
 }
 

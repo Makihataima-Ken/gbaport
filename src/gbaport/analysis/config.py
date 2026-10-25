@@ -5,7 +5,7 @@ errors so a typo cannot silently change the analysis.
 """
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from gbaport.isa.model import Mode
@@ -44,6 +44,14 @@ class GameConfig:
     scan_pointers: bool = True  # guess entries from ROM words that point at function starts
     sweep: bool = False  # guess the code that follows code (drain_neighbours)
 
+    def with_entries(self, entries: tuple[int, ...], thumb_entries: tuple[int, ...]) -> "GameConfig":
+        """This configuration with more entries (what gbaport learn learned)."""
+        return replace(
+            self,
+            entries=tuple(dict.fromkeys((*self.entries, *entries))),
+            thumb_entries=tuple(dict.fromkeys((*self.thumb_entries, *thumb_entries))),
+        )
+
 
 _SECTIONS = {
     "rom": {"sha1", "save"},
@@ -53,12 +61,42 @@ _SECTIONS = {
 _RAM_CODE_KEYS = {"rom", "ram", "size", "mode"}
 _JUMP_TABLE_KEYS = {"at", "table", "count"}
 _TIMING_MODELS = ("block", "frame")
+LEARNED = "learned.toml"
 
 
 def default_config_path(game_code: str, root: Path = Path(".")) -> Path | None:
     """``games/<game_code>/game.toml`` under ``root``, if it exists."""
     path = root / "games" / game_code / "game.toml"
     return path if path.is_file() else None
+
+
+def learned_path(game_code: str, root: Path = Path(".")) -> Path:
+    """``games/<game_code>/learned.toml`` under ``root``: the entries gbaport learn found,
+    read together with game.toml. gbaport writes it; it holds addresses only."""
+    return root / "games" / game_code / LEARNED
+
+
+def load_learned(path: Path, sha1: str) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """(ARM entries, Thumb entries) learned for the ROM ``sha1``."""
+    learned = load_config(path)
+    if learned.rom_sha1 != sha1:
+        raise ConfigError(f"{path} is for ROM sha1 {learned.rom_sha1}, but this ROM is {sha1}")
+    return learned.entries, learned.thumb_entries
+
+
+def write_learned(path: Path, sha1: str, entries, thumb_entries) -> None:
+    """Writes the learned entries (sorted) as a game.toml of their own."""
+    def listing(values) -> str:
+        return "".join(f"    0x{value:08x},\n" for value in sorted(values))
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# Code gbaport learn found by replaying recorded play natively, read together with\n"
+        "# game.toml. Written by gbaport learn; addresses only, no ROM bytes.\n"
+        f'[rom]\nsha1 = "{sha1}"\n\n[code]\nentries = [\n{listing(entries)}]\n'
+        f"thumb_entries = [\n{listing(thumb_entries)}]\n",
+        encoding="utf-8", newline="\n",
+    )
 
 
 def load_config(path: str | Path) -> GameConfig:

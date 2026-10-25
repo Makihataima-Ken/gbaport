@@ -28,6 +28,7 @@ def test_a_jump_to_code_that_was_not_recompiled_names_the_address():
     run = run_test("err_missing")
     assert run.status == 3
     assert "no recompiled code at 0x08100000 (Thumb state" in run.stderr
+    assert ", frame 0): gbaport learn finds it" in run.stderr  # from a recording of the play
     assert "thumb_entries" in run.stderr
 
 

@@ -8,11 +8,18 @@ from pathlib import Path
 
 from gbaport import __version__
 from gbaport.analysis.analyze import analysis_to_dict, analyze_rom, sorted_issues, summary_lines
-from gbaport.analysis.config import GameConfig, default_config_path, load_config
+from gbaport.analysis.config import (
+    GameConfig,
+    default_config_path,
+    learned_path,
+    load_config,
+    load_learned,
+)
 from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save_trace
 from gbaport.disasm import disassemble, format_line
 from gbaport.inputs import format_input, load_input
 from gbaport.isa.model import Mode
+from gbaport.learn import learn
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.android import ABIS as ANDROID_ABIS
 from gbaport.native.android import (
@@ -47,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_recompile_command(commands)
     _add_build_command(commands)
     _add_verify_command(commands)
+    _add_learn_command(commands)
     return parser
 
 
@@ -107,20 +115,34 @@ def _add_analyze_command(commands) -> None:
     analyze.set_defaults(handler=_run_analyze)
 
 
-def _analyse(args: argparse.Namespace, rom: RomImage):
-    """Analyse ``rom`` with its game.toml and traces, printing which ones were used."""
+def _config(args: argparse.Namespace, rom: RomImage) -> GameConfig:
+    """``rom``'s game.toml with the entries gbaport learn learned (learned.toml next to
+    it), printing which files were read."""
     game_code = parse_header(rom).game_code
     config_path = args.config or default_config_path(game_code)
     config = load_config(config_path) if config_path else GameConfig()
-    trace_paths = [*default_trace_paths(game_code), *map(Path, args.trace)]
-    sha1 = inspect_rom(rom).sha1
-    traces = tuple(load_trace(path, sha1) for path in trace_paths)
-    analysis = analyze_rom(rom, config, traces)
     if config_path:
         print(f"{'config':<13}{config_path}")
+    learned = learned_path(game_code or "game")
+    if learned.exists():
+        config = config.with_entries(*load_learned(learned, inspect_rom(rom).sha1))
+        print(f"{'learned':<13}{learned}")
+    return config
+
+
+def _traces(args: argparse.Namespace, rom: RomImage) -> tuple[Trace, ...]:
+    """The game's traces and those ``--trace`` names, printing which were read."""
+    trace_paths = [*default_trace_paths(parse_header(rom).game_code), *map(Path, args.trace)]
+    sha1 = inspect_rom(rom).sha1
     for path in trace_paths:
         print(f"{'trace':<13}{path}")
-    return analysis
+    return tuple(load_trace(path, sha1) for path in trace_paths)
+
+
+def _analyse(args: argparse.Namespace, rom: RomImage):
+    """Analyse ``rom`` with its game.toml, learned entries and traces, printing which ones
+    were used."""
+    return analyze_rom(rom, _config(args, rom), _traces(args, rom))
 
 
 def _run_analyze(args: argparse.Namespace) -> int:
@@ -175,8 +197,7 @@ def _add_trace_command(commands) -> None:
 def _run_trace(args: argparse.Namespace) -> int:
     rom = RomImage.load(args.rom)
     game_code = parse_header(rom).game_code
-    config_path = args.config or default_config_path(game_code)
-    config = load_config(config_path) if config_path else GameConfig()
+    config = _config(args, rom)
     out = Path(args.out) if args.out else Path("games") / game_code / "traces" / "mgba.trace"
     sha1 = inspect_rom(rom).sha1
     recorded = load_trace(out, sha1) if out.exists() else Trace(sha1)
@@ -430,6 +451,56 @@ def _run_verify(args: argparse.Namespace) -> int:
     program = compile_native(root / "generated", root / "build", f"{game_code}-verify", "headless")
     return verify(program, Path(args.rom), args.frames, Path(args.input) if args.input else None,
                   root, args.slack)
+
+
+def _add_learn_command(commands) -> None:
+    learn_command = commands.add_parser(
+        "learn", help="play a recording of the game again and learn the code it missed"
+    )
+    learn_command.add_argument("rom", help="path to a .gba file")
+    learn_command.add_argument(
+        "--input",
+        help="the recording (default: ROM.session.input next to the ROM, which the window "
+        "records)",
+    )
+    learn_command.add_argument(
+        "--save", help="the save the recorded play started from (default: the recording's .sav)"
+    )
+    learn_command.add_argument(
+        "--frames", type=_at_least(1),
+        help="frames to play (default: 30 seconds past the recording's last press)",
+    )
+    learn_command.add_argument(
+        "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
+    )
+    learn_command.add_argument(
+        "--trace", action="append", default=[],
+        help="trace file to import (repeatable; games/<game_code>/traces/*.trace are read too)",
+    )
+    learn_command.set_defaults(handler=_run_learn)
+
+
+def _run_learn(args: argparse.Namespace) -> int:
+    rom = RomImage.load(args.rom)
+    game_code = parse_header(rom).game_code or "game"
+    recording = Path(args.input) if args.input else Path(args.rom).with_suffix(".session.input")
+    if not recording.exists():
+        raise ValueError(f"no recording {recording}: play the game in the window first (it "
+                         "records the play), or give --input FILE")
+    presses = load_input(recording)
+    start_save = Path(args.save) if args.save else recording.with_name(recording.name + ".sav")
+    if args.save and not start_save.exists():
+        raise ValueError(f"no save {start_save}")
+    frames = args.frames or (presses[-1].frame if presses else 0) + 30 * 60
+    learned = learned_path(game_code)
+    found = learn(Path(args.rom), rom, _config(args, rom), _traces(args, rom), learned,
+                  recording, start_save if start_save.exists() else None, frames,
+                  Path("games") / game_code / "build" / "learn")
+    if found:
+        print(f"{len(found)} addresses learned into {learned}; build the game again to play on")
+    else:
+        print("the replay played to its end: nothing to learn")
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
