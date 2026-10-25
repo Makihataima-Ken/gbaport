@@ -283,3 +283,23 @@ c1: bx lr
 c2: bx lr
 dflt: bx lr
 """
+
+# The ARM compiler's Thumb switch through a table of halfwords: offsets, in halfwords,
+# from what the `add pc` reads as pc.
+#   cc dispatch (reads pc as d0)   d0 table 3, 4, 5   d6 c0   d8 c1   da c2   dc dflt
+HALFWORD_TABLE = """
+    cmp r0, #3
+    bhs dflt
+    adr r3, tbl
+    adds r3, r3, r0
+    ldrh r3, [r3, r0]
+    lsls r3, r3, #1
+    add pc, r3
+.align 2
+tbl: .hword 3, 4, 5
+.align 1
+c0: bx lr
+c1: bx lr
+c2: bx lr
+dflt: bx lr
+"""

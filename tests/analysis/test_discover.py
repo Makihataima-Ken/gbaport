@@ -7,6 +7,7 @@ from progkit import (
     CODE_ADDR,
     CRT0,
     DMA_COPY,
+    HALFWORD_TABLE,
     IRQ_IN_RAM,
     KNOWN_JUMP,
     RECURSION,
@@ -398,6 +399,13 @@ def test_byte_table_rows_are_one_byte_literals():
     ex = explore_program(BYTE_TABLE, thumb=True)
     assert ex.successors[0x080000CA] == (0x080000D0, 0x080000D2, 0x080000D4)
     assert [ex.literals.get(a) for a in (0x080000CC, 0x080000CD, 0x080000CE)] == [1, 1, 1]
+    assert ex.issues == []
+
+
+def test_halfword_table_rows_are_two_byte_literals():
+    ex = explore_program(HALFWORD_TABLE, thumb=True)
+    assert ex.successors[0x080000CC] == (0x080000D6, 0x080000D8, 0x080000DA)
+    assert [ex.literals.get(a) for a in (0x080000D0, 0x080000D2, 0x080000D4)] == [2, 2, 2]
     assert ex.issues == []
 
 

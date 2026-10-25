@@ -9,6 +9,9 @@ Patterns (``history`` is the current walk before the dispatch):
 - ARM ``add<ls> pc, pc, rI, lsl #2``: a run of ``b`` instructions at dispatch + 8.
 - GCC Thumb byte table: ``adr rB, table; ldrb rX, [rB, rI]; lsls rX, rX, #1;
   add pc, rX`` (``ldrsb`` too). Entries are halfword offsets from the ``add pc``.
+- The ARM compiler's Thumb halfword table: ``adr rB, table; adds rA, rB, rI;
+  ldrh rX, [rA, rI]; lsls rX, rX, #1; add pc, rX``. Entries are halfwords, offsets in
+  halfwords from the ``add pc``.
 
 The entry count comes from the guarding ``cmp rI, #N`` and the unsigned
 condition that guards the dispatch: a ``hi`` branch around it or an ``ls``
@@ -28,6 +31,7 @@ MAX_TABLE_ENTRIES = 1024
 _TIMES_4 = Shift(ShiftKind.LSL, 2)
 _TIMES_2 = Shift(ShiftKind.LSL, 1)
 ADDRESSES, BRANCHES, BYTES, SIGNED_BYTES = "addresses", "branches", "bytes", "signed bytes"
+HALFWORDS = "halfwords"
 # Entries beyond N for ``cmp rI, #N``, by the condition under which the dispatch runs...
 _DISPATCH_IN_RANGE = {Cond.LS: 1, Cond.CC: 0}
 # ...or by the condition of a branch that skips it.
@@ -117,7 +121,8 @@ def _match(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None,
 
 
 def _byte_table(dispatch: Instruction, history: list[Step]) -> tuple[int, int | None, str] | None:
-    """Match ``ldrb rY, [base, index]; lsls rX, rY, #1; add pc, rX`` with base known."""
+    """Match ``ldrb rY, [base, index]; lsls rX, rY, #1; add pc, rX`` with base known, or
+    ``adds rA, base, index; ldrh rY, [rA, index]; lsls rX, rY, #1; add pc, rX``."""
     i = _definition(history, len(history) - 1, dispatch.rm)
     if i is None:
         return None
@@ -128,6 +133,19 @@ def _byte_table(dispatch: Instruction, history: list[Step]) -> tuple[int, int | 
     if j is None:
         return None
     load = history[j].ins
+    if load.op is Op.LDRH and load.rm is not None and load.shift is None and load.rn != load.rm:
+        k = _definition(history, j - 1, load.rn)  # adds rA, rB, rI with rB the table
+        if k is None:
+            return None
+        add = history[k].ins
+        if add.op is not Op.ADD or add.rm is None or add.shift is not None:
+            return None
+        if load.rm not in (add.rn, add.rm):
+            return None
+        base = add.rm if add.rn == load.rm else add.rn
+        if base not in history[k].consts:
+            return None
+        return history[k].consts[base], _bound(history, k - 1, load.rm, dispatch), HALFWORDS
     if load.op not in (Op.LDRB, Op.LDRSB) or load.rm is None or load.shift is not None:
         return None
     consts = history[j].consts
@@ -219,6 +237,14 @@ def _table(dispatch: Instruction, table: int, count: int, kind: str, space: Code
             offsets.append(value - 0x100 if kind == SIGNED_BYTES and value & 0x80 else value)
         targets = tuple((base + 2 * offset) & 0xFFFFFFFE for offset in offsets)
         return JumpTable(dispatch.addr, table, dispatch.mode, targets, data=True, entry_size=1)
+    if kind == HALFWORDS:
+        base = dispatch.addr + 4  # what the add reads as pc
+        targets = []
+        for i in range(min(count, MAX_TABLE_ENTRIES)):
+            if not space.contains(table + 2 * i, 2):
+                break
+            targets.append((base + 2 * space.read16(table + 2 * i)) & 0xFFFFFFFE)
+        return JumpTable(dispatch.addr, table, dispatch.mode, tuple(targets), data=True, entry_size=2)
     mask = ~1 if dispatch.mode is Mode.THUMB else ~3
     targets = []
     for i in range(min(count, MAX_TABLE_ENTRIES)):
