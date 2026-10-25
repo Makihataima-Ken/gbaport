@@ -154,7 +154,7 @@ def fake_sdl(tmp_path: Path) -> Path:
 def generated(tmp_path: Path, *names: str) -> Path:
     folder = tmp_path / "generated"
     folder.mkdir(exist_ok=True)
-    for name in (*names, "gba_program.h"):
+    for name in (*names, "gba_cpu.h"):
         (folder / name).write_text(f"/* {name} */\n", encoding="utf-8")
     return folder
 
@@ -169,7 +169,7 @@ def test_the_project_holds_the_game_the_runtime_sdl_and_the_rom(tmp_path):
     assert (main / "java" / "org" / "libsdl" / "app" / "SDLActivity.java").exists()
     assert (main / "java" / "org" / "gbaport" / "game" / "GameActivity.java").exists()
     assert (main / "res" / "mipmap-hdpi" / "ic_launcher.png").exists()
-    assert (main / "cpp" / "generated" / "gba_program.h").exists()
+    assert (main / "cpp" / "generated" / "gba_cpu.h").exists()
     assert (main / "cpp" / "runtime" / "touch.h").exists()
     cmake = (main / "cpp" / "CMakeLists.txt").read_text(encoding="utf-8")
     units = [line.strip() for line in cmake.splitlines() if line.strip().endswith(".c")]

@@ -15,8 +15,8 @@ def test_recompile_writes_sources_that_compile(tmp_path, capsys, monkeypatch):
     assert "functions    4" in out and "lift issues  0" in out
     generated = tmp_path / "games" / "ATST" / "generated"
     names = sorted(path.name for path in generated.iterdir())
-    assert names == ["gba_code_000.c", "gba_cpu.h", "gba_dispatch.c", "gba_program.h", "gba_rom.c"]
-    for source in ("gba_code_000.c", "gba_dispatch.c", "gba_rom.c"):
+    assert names == ["gba_code_08000000.c", "gba_cpu.h", "gba_dispatch.c", "gba_rom.c"]
+    for source in ("gba_code_08000000.c", "gba_dispatch.c", "gba_rom.c"):
         command = [clang(), "-std=c11", "-Wall", "-Werror", "-Wno-unused-label", "-c",
                    str(generated / source), "-o", str(tmp_path / f"{source}.o")]
         subprocess.run(command, check=True, capture_output=True)

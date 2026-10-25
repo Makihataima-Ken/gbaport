@@ -1,7 +1,9 @@
-from progkit import CRT0, program_space
+from ksasm import assemble
+from progkit import CRT0, program_rom, program_space
 
 from gbaport.analysis.cfg import build_program
 from gbaport.analysis.discover import explore
+from gbaport.analysis.space import CodeSpace
 from gbaport.isa.model import Mode
 from gbaport.lift import function
 from gbaport.lift.program import lift_program, program_files, single_source
@@ -41,14 +43,20 @@ def test_prefix_keeps_programs_apart():
     assert "uint32_t c7_f_080000c0(GbaCtx *ctx)" in program.functions[0x080000C0]
 
 
-def test_program_files_split_the_code():
-    program = lifted(TWO_FUNCTIONS, seeds=BOTH)
-    files = program_files(program, chunk=1)
-    assert sorted(files) == ["gba_code_000.c", "gba_code_001.c", "gba_dispatch.c", "gba_program.h"]
-    assert '#include "gba_cpu.h"' in files["gba_program.h"]
-    code = [text for name, text in files.items() if name.endswith(".c")]
-    assert all(text.startswith('#include "gba_program.h"') for text in code)
-    assert single_source(program).startswith('#include "gba_cpu.h"')
+def test_each_code_file_holds_8_kib_of_code_and_declares_what_it_uses():
+    calls_first = assemble("mov r1, #2\nbl 0x080000c0\nb 0x08002000", addr=0x08002000)
+    rom = program_rom("mov r0, #1\nbx lr", size=0x4000, patches={0x2000: calls_first})
+    ex = explore(CodeSpace(rom), [(0x080000C0, Mode.ARM, "seed"), (0x08002000, Mode.ARM, "seed")])
+    files = program_files(lift_program(build_program(ex), ex))
+    assert sorted(files) == ["gba_code_08000000.c", "gba_code_08002000.c", "gba_dispatch.c"]
+    first, second = files["gba_code_08000000.c"], files["gba_code_08002000.c"]
+    assert all(text.startswith('#include "gba_cpu.h"') for text in files.values())
+    assert "uint32_t f_080000c0(GbaCtx *ctx);" in first and "f_08002000" not in first
+    assert "uint32_t f_080000c0(GbaCtx *ctx);" in second  # it calls the first
+    assert "GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr);" in second
+    for entry in (0x080000C0, 0x08002000):
+        assert f"uint32_t f_{entry:08x}(GbaCtx *ctx);" in files["gba_dispatch.c"]
+    assert single_source(lifted(TWO_FUNCTIONS, seeds=BOTH)).startswith('#include "gba_cpu.h"')
 
 
 def test_an_instruction_c_cannot_express_is_reported(monkeypatch):

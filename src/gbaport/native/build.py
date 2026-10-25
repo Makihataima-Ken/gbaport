@@ -8,9 +8,11 @@ compiles those sources together with the runtime in ``gbaport/runtime`` and one 
 ``sdl`` (a window, with SDL3 from ``sdl3.py``) or ``headless`` (for tests and scripts).
 """
 
+import hashlib
 import os
 import subprocess
 import zlib
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -63,32 +65,51 @@ def generated_sources(
 
 
 def write_sources(files: dict[str, str], out: Path) -> None:
-    """Write ``files`` to ``out``, first removing the generated files of an earlier run."""
+    """Write ``files`` to ``out``, removing the generated files of an earlier run that are
+    gone. A file whose text is the same is left alone, its time too, so build tools (the
+    app's CMake) compile only what changed."""
     out.mkdir(parents=True, exist_ok=True)
     for stale in [*out.glob("gba_code_*.c"), *(out / name for name in GENERATED_NAMES)]:
-        stale.unlink(missing_ok=True)  # only files this command writes
+        if stale.name not in files:
+            stale.unlink(missing_ok=True)  # only files this command writes
     for name, text in files.items():
-        (out / name).write_text(text, encoding="utf-8", newline="\n")
+        path = out / name
+        if not (path.exists() and path.read_bytes() == text.encode("utf-8")):
+            path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def compile_native(sources: Path, out: Path, name: str, host: str = "headless") -> Path:
-    """Compile the generated ``sources`` with the runtime and ``host``; returns the program."""
+def compile_native(sources: Path, out: Path, name: str, host: str = "headless",
+                   log: Callable[[str], None] = print) -> Path:
+    """Compile the generated ``sources`` with the runtime and ``host``; returns the program.
+    A file compiled before from the same text, with the same headers and flags, is not
+    compiled again (each object has a ``.key`` file with the digest of all that)."""
     clang = find_clang()
     include, libraries = sdl3_flags(sdl3_prefix()) if host == "sdl" else ([], [])
     objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
     units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in (*RUNTIME_SOURCES, *HOSTS[host]))]
+    headers = hashlib.sha1()
+    for header in sorted([*sources.glob("*.h"), *RUNTIME.glob("*.h")]):
+        headers.update(header.name.encode() + b"\0" + header.read_bytes())
+    fresh: list[str] = []
 
     def compile_unit(unit: Path) -> Path:
-        obj = objects / f"{unit.stem}.o"
+        obj, stamp = objects / f"{unit.stem}.o", objects / f"{unit.stem}.key"
         command = [clang, *CFLAGS, f"-I{sources}", f"-I{RUNTIME}", *include, "-c", str(unit), "-o", str(obj)]
+        key = hashlib.sha1(headers.digest() + "\0".join(command).encode() + unit.read_bytes()).hexdigest()
+        if obj.exists() and stamp.exists() and stamp.read_text(encoding="utf-8") == key:
+            return obj
+        stamp.unlink(missing_ok=True)
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         if result.returncode != 0:
             raise ToolchainError(f"clang failed on {unit.name}:\n{result.stderr[-4000:]}")
+        stamp.write_text(key, encoding="utf-8")
+        fresh.append(unit.name)
         return obj
 
     with ThreadPoolExecutor(max_workers=os.cpu_count() or 2) as pool:
         compiled = list(pool.map(compile_unit, units))
+    log(f"compiled {len(fresh)} of {len(units)} files")
     program = out / (name + (".exe" if os.name == "nt" else ""))
     _link(clang, compiled, program, libraries)
     for _ in range(SALTED_REBUILDS):
