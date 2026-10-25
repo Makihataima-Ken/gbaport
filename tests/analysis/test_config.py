@@ -58,6 +58,11 @@ def test_pointer_scan_can_be_turned_off():
     assert parse_config("[code]\nscan_pointers = false").scan_pointers is False
 
 
+def test_the_sweep_is_for_games_that_ask_for_it():
+    assert GameConfig().sweep is False
+    assert parse_config("[code]\nsweep = true").sweep is True
+
+
 @pytest.mark.parametrize(
     "text,message",
     [
@@ -68,6 +73,7 @@ def test_pointer_scan_can_be_turned_off():
         ("[code]\nentries = 5", "list of addresses"),
         ("[code]\ndata = [[2, 1]]", "is empty"),
         ("[code]\nscan_pointers = 1", "scan_pointers must be true or false"),
+        ("[code]\nsweep = 1", "sweep must be true or false"),
         ("[code]\ndata = [[1, 2, 3]]", "[start, end] pairs"),
         ("[code]\njump_tables = [{ at = 1, count = 2 }]", "missing key(s): table"),
         ("[code]\njump_tables = [{ at = 1, table = 2, count = 0 }]", "at least 1"),

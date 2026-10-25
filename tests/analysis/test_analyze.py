@@ -111,6 +111,14 @@ def test_pointer_scan_finds_callbacks():
     assert 0x080000C8 not in without.program.functions
 
 
+def test_the_sweep_finds_functions_for_games_that_ask_for_it():
+    rom = program_rom("bx lr\n.thumb\nnext:\n movs r0, #1\n bx lr")
+    assert 0x080000C4 not in analyze_rom(rom).program.functions
+    swept = analyze_rom(rom, GameConfig(sweep=True))
+    assert swept.program.functions[0x080000C4].kind == "neighbour"
+    assert "found by     neighbour 1, seed 1" in summary_lines(swept)
+
+
 def copied_code_rom(source: str = DMA_COPY):
     return program_rom(source, patches={0x200: assemble("bx lr\nbx lr", addr=0x03000000)})
 

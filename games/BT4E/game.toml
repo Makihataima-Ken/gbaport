@@ -6,10 +6,13 @@
 #   relative offsets at 0x08036778-0x080367df;
 # - the IWRAM interrupt dispatcher's handlers (ARM, copied to 0x03000000 at start-up);
 # - functions reached through pointers during the first minute of play.
+# The game calls most of its functions through tables of relative offsets, so the sweep
+# guesses the code after the code found (it finds more than 1100 functions more).
 [rom]
 sha1 = "8dd4b6e95dca4554a919bff55128481a9a95b611"
 
 [code]
+sweep = true
 entries = [
     0x03000604, 0x03000660, 0x030008d8, 0x03000d24,
 ]

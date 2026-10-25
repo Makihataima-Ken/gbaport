@@ -95,6 +95,7 @@ def explore(
     *,
     traced: Traced | None = None,
     candidates: list[tuple[int, Mode, str]] | None = None,
+    sweep: bool = False,
 ) -> Exploration:
     """Discover the code reachable from ``seeds`` of (address, mode, entry kind).
 
@@ -106,7 +107,8 @@ def explore(
     ``traced`` resolves the indirect sites a walk reaches; targets of traced
     sites no walk reaches become entries of their own. ``candidates`` are
     guessed entries (pointer scan), walked one by one after all of that, and
-    skipped when they land in code or data already found.
+    skipped when they land in code or data already found. With ``sweep``, the
+    code that follows code found so far is guessed last (``drain_neighbours``).
     """
     config = config or GameConfig()
     traced = {space.canonical(site): hits for site, hits in (traced or {}).items()}
@@ -118,6 +120,8 @@ def explore(
         explorer.drain()
         explorer.drain_traces()
         explorer.drain_candidates(candidates or [])
+        if sweep:
+            explorer.drain_neighbours()
         if explorer.targets <= leaders:
             return explorer.ex
         leaders |= explorer.targets
@@ -161,8 +165,9 @@ class _Explorer:
                     self.add_entry(target, mode, "trace", origin=site)
             self.drain()
 
-    def drain_candidates(self, candidates: list[tuple[int, Mode, str]]) -> None:
-        """Try each guessed entry on its own, and undo it if anything about it looks wrong.
+    def drain_candidates(self, candidates: list[tuple[int, Mode, str]]) -> list[int]:
+        """Try each guessed entry on its own, and undo it if anything about it looks wrong;
+        returns the addresses of the instructions the kept guesses decoded.
 
         A guess is skipped when it lands in code or data already found. Its
         walk is undone when it decodes something no compiler emits (undefined
@@ -174,6 +179,7 @@ class _Explorer:
         library routines have several entry points, and long-branch veneers
         reach them with a plain ``b``.
         """
+        kept: list[int] = []
         for addr, mode, kind in candidates:
             addr = self.space.canonical(addr)
             covering = self.ex.instructions.get(addr - 2)
@@ -190,7 +196,43 @@ class _Explorer:
             issues = self.ex.issues[mark["issues"] :]
             if self.suspect or any(issue.kind in _SUSPECT_ISSUES for issue in issues):
                 self._undo(mark)
+            else:
+                kept += self.trial
             self.trial = None
+        return kept
+
+    def drain_neighbours(self) -> None:
+        """Code that follows code (the sweep). Where decoded code ends with no fall-through,
+        the next instruction, past literal pools and zero padding, is guessed as an entry in
+        the same state and then in the other one (veneers switch it); every guess kept
+        leads to the code after it in turn. A game reaches such functions through tables
+        of relative offsets, which no walk and no pointer scan can follow."""
+        queue = deque(self._neighbours(self.ex.instructions.values()))
+        while queue:
+            kept = self.drain_candidates([queue.popleft()])
+            queue.extend(self._neighbours([self.ex.instructions[addr] for addr in kept]))
+
+    def _neighbours(self, instructions) -> list[tuple[int, Mode, str]]:
+        """The guesses for the code after the last of each run among ``instructions``."""
+        found = []
+        for ins in instructions:
+            after = ins.addr + ins.size
+            if after in self.ex.instructions:
+                continue
+            while True:
+                if after in self.ex.literals:
+                    after += self.ex.literals[after]
+                elif self.space.contains(after, 2) and self.space.read16(after) == 0:
+                    after += 2
+                else:
+                    break
+            other = Mode.THUMB if ins.mode is Mode.ARM else Mode.ARM
+            for mode in (ins.mode, other):
+                at = (after + 3) & ~3 if mode is Mode.ARM else after
+                if at in self.ex.instructions or not self.space.contains(at, 4) or self._is_data(at):
+                    continue
+                found.append((at, mode, "neighbour"))
+        return found
 
     def _undo(self, mark: dict[str, int]) -> None:
         """Drop everything recorded since ``mark``."""
@@ -317,6 +359,7 @@ class _Explorer:
         ins = self.space.decode(addr, mode)
         if ins is None:
             self.issue(addr, "outside_code", "walked off the end of analysable code")
+            self.suspect = self.suspect or self.trial is not None  # no code runs off the end
             return None
         if self._overlaps(ins):
             self.issue(addr, "overlap", "instruction overlaps one decoded earlier")

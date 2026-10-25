@@ -42,11 +42,12 @@ class GameConfig:
     ram_code: tuple[RamCode, ...] = ()
     timing_model: str = "block"
     scan_pointers: bool = True  # guess entries from ROM words that point at function starts
+    sweep: bool = False  # guess the code that follows code (drain_neighbours)
 
 
 _SECTIONS = {
     "rom": {"sha1", "save"},
-    "code": {"entries", "thumb_entries", "data", "jump_tables", "scan_pointers"},
+    "code": {"entries", "thumb_entries", "data", "jump_tables", "scan_pointers", "sweep"},
     "timing": {"model"},
 }
 _RAM_CODE_KEYS = {"rom", "ram", "size", "mode"}
@@ -84,6 +85,7 @@ def parse_config(text: str, source: str = "game.toml") -> GameConfig:
         ram_code=tuple(_ram_code(item, source) for item in _tables(doc, "ram_code", source)),
         timing_model=_timing(timing, source),
         scan_pointers=_flag(code, "scan_pointers", True, source),
+        sweep=_flag(code, "sweep", False, source),
     )
 
 

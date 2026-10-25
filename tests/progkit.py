@@ -284,6 +284,26 @@ c2: bx lr
 dflt: bx lr
 """
 
+# Functions that no call or pointer leads to, only the code before them (a game reaches
+# them through tables of relative offsets): one after a literal pool and zero padding, one
+# right after a return.
+#   c0 main (loads c4)   c4 literal   c8 padding   ca after_pool   ce last (calls after_pool)
+SWEEP = """
+main:
+    ldr r0, lit
+    bx lr
+.align 2
+lit: .word 0x12345678
+.hword 0
+after_pool:
+    movs r0, #1
+    bx lr
+last:
+    push {lr}
+    bl after_pool
+    pop {pc}
+"""
+
 # The ARM compiler's Thumb switch through a table of halfwords: offsets, in halfwords,
 # from what the `add pc` reads as pc.
 #   cc dispatch (reads pc as d0)   d0 table 3, 4, 5   d6 c0   d8 c1   da c2   dc dflt

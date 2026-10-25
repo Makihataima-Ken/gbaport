@@ -11,10 +11,12 @@ from progkit import (
     IRQ_IN_RAM,
     KNOWN_JUMP,
     RECURSION,
+    SWEEP,
     THUMB_TABLE,
     UNBOUNDED_TABLE,
     VENEER,
     explore_program,
+    program_space,
 )
 from romkit import build_rom
 
@@ -385,6 +387,37 @@ def test_a_wrong_guess_cannot_change_trusted_results():
     assert ex.jumps == {0x080000C2: 0x080000C8}
     assert 0x080000CA not in ex.entries
     assert ex.issues == []
+
+
+def test_the_sweep_finds_code_that_only_code_before_it_leads_to():
+    assert explore_program(SWEEP, thumb=True).entry_kinds == {0x080000C0: "seed"}
+    ex = explore(program_space(SWEEP, thumb=True), [(0x080000C0, Mode.THUMB, "seed")], sweep=True)
+    assert ex.entry_kinds == {0x080000C0: "seed", 0x080000CA: "neighbour", 0x080000CE: "neighbour"}
+    assert ex.entries[0x080000CA] is Mode.THUMB
+    assert ex.calls == {0x080000D0: (0x080000CA,)}
+    assert ex.issues == []
+
+
+def test_the_sweep_tries_thumb_code_after_arm_code():
+    space = program_space("bx lr\n.thumb\nnext:\n movs r0, #1\n bx lr")
+    ex = explore(space, [(0x080000C0, Mode.ARM, "seed")], sweep=True)
+    assert ex.entries == {0x080000C0: Mode.ARM, 0x080000C4: Mode.THUMB}
+    assert ex.issues == []
+
+
+def test_the_sweep_leaves_what_is_not_code_alone():
+    space = program_space("bx lr\n.hword 0xde00\n.hword 0xde00", thumb=True)
+    ex = explore(space, [(0x080000C0, Mode.THUMB, "seed")], sweep=True)
+    assert ex.entries == {0x080000C0: Mode.THUMB}
+    assert sorted(ex.instructions) == [0x080000C0]  # and the zeros after it, to the ROM's end
+    assert ex.issues == []
+
+
+def test_the_sweep_never_reads_a_switch_table_as_code():
+    ex = explore(program_space(HALFWORD_TABLE, thumb=True), [(0x080000C0, Mode.THUMB, "seed")],
+                 sweep=True)
+    assert ex.entries == {0x080000C0: Mode.THUMB}
+    assert not any(0x080000D0 <= addr < 0x080000D6 for addr in ex.instructions)
 
 
 def test_a_guess_that_decodes_garbage_is_undone():

@@ -67,7 +67,8 @@ def analyze_rom(
     while True:  # each round adopts copies that hold code the last round could not reach
         space = CodeSpace(rom, config.ram_code + detected)
         candidates = pointer_candidates(space) if config.scan_pointers else []
-        exploration = explore(space, seeds, config, traced=traced, candidates=candidates)
+        exploration = explore(space, seeds, config, traced=traced, candidates=candidates,
+                              sweep=config.sweep)
         found = _copied_code(exploration, space, config.ram_code + detected)
         if not found:
             break
