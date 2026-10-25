@@ -82,6 +82,12 @@ def test_learned_addresses_belong_to_the_rom_they_were_learned_from(tmp_path, mo
     assert f"learned.toml is for ROM sha1 {'0' * 40}" in capsys.readouterr().err
 
 
+def test_device_is_instead_of_input_and_save(tmp_path, monkeypatch, capsys):
+    game(tmp_path, monkeypatch)
+    assert main(["learn", "game.gba", "--device", "--input", "x.input"]) == 1
+    assert "--device takes the recording from the phone" in capsys.readouterr().err
+
+
 def test_learn_stops_when_learning_does_not_help(tmp_path, monkeypatch, capsys):
     rom = game(tmp_path, monkeypatch, "err_missing")  # jumps past the end of the ROM
     run_rom(rom, frames=30, args=("--record", RECORDING))

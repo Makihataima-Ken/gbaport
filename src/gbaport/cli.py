@@ -477,13 +477,24 @@ def _add_learn_command(commands) -> None:
         "--trace", action="append", default=[],
         help="trace file to import (repeatable; games/<game_code>/traces/*.trace are read too)",
     )
+    learn_command.add_argument(
+        "--device", action="store_true",
+        help="take the recording from the game's app on the connected phone: its last play",
+    )
     learn_command.set_defaults(handler=_run_learn)
 
 
 def _run_learn(args: argparse.Namespace) -> int:
     rom = RomImage.load(args.rom)
     game_code = parse_header(rom).game_code or "game"
-    recording = Path(args.input) if args.input else Path(args.rom).with_suffix(".session.input")
+    work = Path("games") / game_code / "build" / "learn"
+    if args.device:
+        if args.input or args.save:
+            raise ValueError("--device takes the recording from the phone: give no --input "
+                             "or --save with it")
+        recording = _recording_from_device(application_id(game_code), work / "device")
+    else:
+        recording = Path(args.input) if args.input else Path(args.rom).with_suffix(".session.input")
     if not recording.exists():
         raise ValueError(f"no recording {recording}: play the game in the window first (it "
                          "records the play), or give --input FILE")
@@ -494,13 +505,32 @@ def _run_learn(args: argparse.Namespace) -> int:
     frames = args.frames or (presses[-1].frame if presses else 0) + 30 * 60
     learned = learned_path(game_code)
     found = learn(Path(args.rom), rom, _config(args, rom), _traces(args, rom), learned,
-                  recording, start_save if start_save.exists() else None, frames,
-                  Path("games") / game_code / "build" / "learn")
+                  recording, start_save if start_save.exists() else None, frames, work)
     if found:
         print(f"{len(found)} addresses learned into {learned}; build the game again to play on")
     else:
         print("the replay played to its end: nothing to learn")
     return 0
+
+
+def _recording_from_device(app: str, folder: Path) -> Path:
+    """The app's recording of its last play (and the save it started from), copied into
+    ``folder``."""
+    device = the_device()
+    data = device.get_file(app, "game.session.input")
+    if data is None:
+        raise ValueError(f"{app} on {device.serial} has recorded no play yet: play it first")
+    folder.mkdir(parents=True, exist_ok=True)
+    recording = folder / "game.session.input"
+    recording.write_bytes(data)
+    start = device.get_file(app, "game.session.input.sav")
+    start_save = folder / "game.session.input.sav"
+    if start is None:
+        start_save.unlink(missing_ok=True)
+    else:
+        start_save.write_bytes(start)
+    print(f"took the play recorded on {device.serial}")
+    return recording
 
 
 def main(argv: list[str] | None = None) -> int:

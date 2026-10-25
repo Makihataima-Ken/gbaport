@@ -31,9 +31,12 @@ class DeviceError(OSError):
     """adb failed, or the device did not do what was asked in time."""
 
 
+def adb_program() -> Path:
+    return android_sdk() / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
+
+
 def adb(*args: str, serial: str | None = None, timeout: float = 120) -> str:
-    program = android_sdk() / "platform-tools" / ("adb.exe" if os.name == "nt" else "adb")
-    command = [str(program), *(("-s", serial) if serial else ()), *args]
+    command = [str(adb_program()), *(("-s", serial) if serial else ()), *args]
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
                                 errors="replace", timeout=timeout, check=False)
@@ -108,6 +111,24 @@ class Device:
         self.shell("run-as", app, "cp", staged, f"files/{path.name}")
         self.shell("rm", staged)
         return f"/data/user/0/{app}/files/{path.name}"
+
+    def get_file(self, app: str, name: str) -> bytes | None:
+        """A file from the app's own storage (its debug build lets adb in), or None when
+        there is no such file."""
+        listed = self.adb("shell", f"run-as {shlex.quote(app)} ls {shlex.quote('files/' + name)} "
+                                   "2>/dev/null || true")
+        if not listed.strip():
+            return None
+        command = [str(adb_program()), "-s", self.serial, "exec-out", "run-as", app, "cat",
+                   f"files/{name}"]
+        try:
+            result = subprocess.run(command, capture_output=True, timeout=120, check=False)
+        except subprocess.TimeoutExpired as error:
+            raise DeviceError(f"reading {name} from {app} took more than 120 s") from error
+        if result.returncode != 0:
+            raise DeviceError(f"cannot read {name} from {app}: "
+                              f"{result.stderr.decode(errors='replace').strip()}")
+        return result.stdout
 
     def running(self, app: str) -> bool:
         return bool(self.adb("shell", f"pidof {shlex.quote(app)} || true").strip())

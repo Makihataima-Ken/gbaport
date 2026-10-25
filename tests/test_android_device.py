@@ -186,3 +186,19 @@ def test_an_input_file_plays_on_a_blank_save_and_leaves_the_games_own(phone, tmp
     phone.start(APP)
     assert int(phone.wait_for(r"^SAVED (\d+)$").group(1)) == kept
     phone.stop(APP)
+
+
+def test_learn_takes_the_play_the_phone_recorded(phone, tmp_path, monkeypatch, capsys):
+    monkeypatch.chdir(tmp_path)  # learned.toml goes into games/ATST here
+    hidden = build_test_rom("calls").symbols["hidden_thumb"]
+    build_and_install(phone, tmp_path, monkeypatch, "calls")
+    phone.wait_for(rf"^error: no recompiled code at 0x{hidden:08x} ")  # the app records its play
+    phone.stop(APP)
+    capsys.readouterr()
+    assert main(["learn", "game.gba", "--config", "game.toml", "--device"]) == 0
+    out = capsys.readouterr().out
+    assert f"took the play recorded on {phone.serial}" in out
+    assert "2 addresses learned into" in out
+    build_and_install(phone, tmp_path, monkeypatch, "calls")
+    phone.wait_for(r"^DONE 2 passed, 0 failed$")
+    phone.stop(APP)
