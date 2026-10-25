@@ -95,3 +95,33 @@ def test_learn_stops_when_learning_does_not_help(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "learned 0x08100000 (Thumb)" in captured.out
     assert "has 0x08100000 already, but it is still missing" in captured.err
+
+
+def test_learn_says_when_the_replay_cannot_run(tmp_path, monkeypatch, capsys):
+    rom = game(tmp_path, monkeypatch, "save_sram")
+    run_rom(rom, frames=30, args=("--record", RECORDING))
+    (tmp_path / "wrong.sav").write_bytes(bytes(100))  # no save chip holds 100 bytes
+    assert main(["learn", "game.gba", "--save", "wrong.sav"]) == 1
+    err = capsys.readouterr().err
+    assert "the replay could not run (exit status 2)" in err and "has 100 bytes" in err
+
+
+def test_learn_plays_to_where_the_recorded_play_ended(tmp_path, monkeypatch, capsys):
+    rom = game(tmp_path, monkeypatch, "late_call")  # stops 2000 frames in, no key pressed
+    run_rom(rom, frames=2100, args=("--record", RECORDING))
+    ended = (tmp_path / RECORDING).read_text(encoding="utf-8").splitlines()[-1]
+    assert re.fullmatch(r"# ended at frame \d+: no recompiled code at .*", ended)
+    assert main(["learn", "game.gba"]) == 0
+    assert [addr for addr, _, _ in learned_lines(capsys.readouterr().out)] == [
+        rom.symbols["hidden_late"]]
+
+
+def test_learn_says_when_the_replay_does_not_stop_where_the_play_did(tmp_path, monkeypatch,
+                                                                     capsys):
+    rom = game(tmp_path, monkeypatch, "hello")
+    run_rom(rom, frames=30, args=("--record", RECORDING))
+    with open(tmp_path / RECORDING, "a", encoding="utf-8") as recording:  # another build's play
+        recording.write("# ended at frame 20: no recompiled code at 0x08000400 (Thumb state)\n")
+    assert main(["learn", "game.gba"]) == 1
+    assert "the replay did not stop where the recorded play did (frame 20" in \
+        capsys.readouterr().err

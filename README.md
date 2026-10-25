@@ -129,8 +129,11 @@ The window recorded the play that led there, so
 
     uv run python -m gbaport.cli learn roms/mygame.gba
 
-plays it again natively from the save it started from. The replay does exactly what the
-play did, so it stops at the same place; `learn` adds the address to the game's learned
+plays it again natively from the save it started from, up to where the play ended (the
+recording's last line says where, and why; an app killed in the background leaves none,
+and then the replay plays 30 seconds past the last key change, or `--frames N`). The
+replay does exactly what the play did, so it stops at the same place; `learn` adds the
+address to the game's learned
 entries (`games/<game_code>/learned.toml`, read together with `game.toml`), builds again
 and replays again, until the replay gets through. Each round takes about 15 seconds for
 Dragon Ball GT Transformation: a rebuild compiles only the code files that changed (code

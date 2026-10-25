@@ -54,3 +54,11 @@ def test_the_window_records_next_to_its_save_and_headless_only_when_asked(tmp_pa
     assert (tmp_path / "game.session.input").read_text(encoding="utf-8").startswith("# recorded")
     run_rom(rom, frames=60, save=tmp_path / "other.sav")
     assert not (tmp_path / "other.session.input").exists()
+
+
+def test_the_window_plays_on_when_it_cannot_record_next_to_its_save(tmp_path):
+    run = run_rom(build_test_rom("hello"), host="sdl", frames=60,
+                  save=tmp_path / "no such folder" / "game.sav")
+    assert run.status == 0, run.stderr  # as before the window recorded
+    assert run.lines[-1] == "DONE 1 passed, 0 failed"
+    assert "warning: cannot record the play" in run.stderr

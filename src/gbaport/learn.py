@@ -29,6 +29,7 @@ from gbaport.rom.info import inspect_rom
 # runtime.c's gba_missing
 MISS = re.compile(r"no recompiled code at 0x([0-9a-f]{8}) \((Thumb|ARM) state, lr = 0x[0-9a-f]{8}, "
                   r"frame (\d+)\)")
+ENDED = re.compile(r"# ended at frame (\d+)(?:: (.*))?")  # host_finish's last line
 MOST = 500  # addresses one run learns before it gives up
 REPLAY_TIMEOUT = 3600  # seconds
 
@@ -75,6 +76,16 @@ def learn(rom_path: Path, rom: RomImage, config: GameConfig, traces: tuple[Trace
     raise LearnError(f"gave up after learning {MOST} addresses in one run")
 
 
+def recorded_end(recording: Path) -> tuple[int, str] | None:
+    """(frame, why) from the recording's last ``# ended at frame N[: why]`` line, which the
+    hosts write when a run ends ("" when it ended without an error); None when there is
+    none (an app killed in the background)."""
+    for line in reversed(recording.read_text(encoding="utf-8").splitlines()):
+        if found := ENDED.fullmatch(line.strip()):
+            return int(found.group(1)), found.group(2) or ""
+    return None
+
+
 def _build(rom: RomImage, config: GameConfig, traces: tuple[Trace, ...], work: Path) -> Path:
     analysis = analyze_rom(rom, config, traces)
     lifted = lift_program(analysis.program, analysis.exploration)
@@ -95,7 +106,10 @@ def _replay(program: Path, rom_path: Path, recording: Path, start_save: Path | N
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=REPLAY_TIMEOUT, check=False,
         )
-    if result.returncode != 3:  # 0: stopped with nothing to wake it, 4: the frame limit
+    if result.returncode in (0, 4):  # stopped with nothing to wake it, or the frame limit
         return ""
+    if result.returncode != 3:  # bad arguments, an unusable save file, a crash
+        raise LearnError(f"the replay could not run (exit status {result.returncode}): "
+                         f"{result.stderr.strip()[-2000:]}")
     errors = [line for line in result.stderr.splitlines() if line.startswith("error: ")]
     return errors[-1].removeprefix("error: ") if errors else result.stderr.strip()

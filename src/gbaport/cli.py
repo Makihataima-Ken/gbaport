@@ -19,7 +19,7 @@ from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save
 from gbaport.disasm import disassemble, format_line
 from gbaport.inputs import format_input, load_input
 from gbaport.isa.model import Mode
-from gbaport.learn import learn
+from gbaport.learn import learn, recorded_end
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.android import ABIS as ANDROID_ABIS
 from gbaport.native.android import (
@@ -468,7 +468,8 @@ def _add_learn_command(commands) -> None:
     )
     learn_command.add_argument(
         "--frames", type=_at_least(1),
-        help="frames to play (default: 30 seconds past the recording's last press)",
+        help="frames to play (default: to where the recording says the play ended, else 30 "
+        "seconds past its last press)",
     )
     learn_command.add_argument(
         "--config", help="game.toml (default: games/<game_code>/game.toml if it exists)"
@@ -502,12 +503,22 @@ def _run_learn(args: argparse.Namespace) -> int:
     start_save = Path(args.save) if args.save else recording.with_name(recording.name + ".sav")
     if args.save and not start_save.exists():
         raise ValueError(f"no save {start_save}")
-    frames = args.frames or (presses[-1].frame if presses else 0) + 30 * 60
+    ended = recorded_end(recording)  # where and why the recorded play ended, if it says
+    if args.frames:
+        frames = args.frames
+    elif ended:
+        frames = ended[0] + 60  # a stop comes in the frame after the last one that ended
+    else:  # a play the app's being killed cut short: 30 seconds past its last press
+        frames = (presses[-1].frame if presses else 0) + 30 * 60
     learned = learned_path(game_code)
     found = learn(Path(args.rom), rom, _config(args, rom), _traces(args, rom), learned,
                   recording, start_save if start_save.exists() else None, frames, work)
     if found:
         print(f"{len(found)} addresses learned into {learned}; build the game again to play on")
+    elif ended and ended[1].startswith("no recompiled code"):
+        raise ValueError(f"the replay did not stop where the recorded play did (frame "
+                         f"{ended[0]}: {ended[1]}): was it played with another build or "
+                         "game.toml?")
     else:
         print("the replay played to its end: nothing to learn")
     return 0

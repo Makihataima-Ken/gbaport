@@ -329,36 +329,47 @@ int host_parse(HostOptions *o, int argc, char **argv)
             o->record_path[n - 4] = 0;
         size_t room = sizeof o->record_path - strlen(o->record_path);
         strncat(o->record_path, ".session.input", room - 1);
+        o->record_by_default = 1;
     }
     return 0;
 }
 
 /* The recording (--record): the keys from now on (host_set_keys), and the save the game
  * starts from as PATH.sav, or no such file when it starts blank. Returns 0, or -1 after
- * printing what it could not write. */
+ * printing what it could not write. The window's own recording is not worth stopping the
+ * game for: without it, the game plays on unrecorded, after a warning. */
 static int start_recording(HostOptions *o, const uint8_t *save, uint32_t size)
 {
     char start[sizeof o->record_path + 4];
     snprintf(start, sizeof start, "%s.sav", o->record_path);
     FILE *f = open_file(o->record_path, "wb");
-    if (!f) {
-        fprintf(stderr, "error: cannot write %s\n", o->record_path);
+    int ok = f != NULL;
+    const char *failed = o->record_path;
+    if (ok && save) {
+        FILE *copy = open_file(start, "wb");
+        ok = copy && fwrite(save, 1, size, copy) == size;
+        if (copy)
+            ok = fclose(copy) == 0 && ok;
+        failed = start;
+    } else if (ok) {
+        remove_file(start);
+    }
+    if (!ok) {
+        if (f) {
+            fclose(f);
+            remove_file(o->record_path);
+        }
+        if (o->record_by_default) {
+            fprintf(stderr, "warning: cannot record the play to %s\n", failed);
+            return 0;
+        }
+        fprintf(stderr, "error: cannot write %s\n", failed);
         return -1;
     }
     fprintf(f, "# recorded by gbaport: the keys the game was given (gbaport/inputs.py)\n");
     fflush(f);
     o->record_file = f;
-    if (!save) {
-        remove_file(start);
-        return 0;
-    }
-    FILE *copy = open_file(start, "wb");
-    int ok = copy && fwrite(save, 1, size, copy) == size;
-    if (copy)
-        ok = fclose(copy) == 0 && ok;
-    if (!ok)
-        fprintf(stderr, "error: cannot write %s\n", start);
-    return ok ? 0 : -1;
+    return 0;
 }
 
 int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
@@ -480,8 +491,13 @@ int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
     if (o->hashes_file && fclose(o->hashes_file) != 0)
         fprintf(stderr, "warning: cannot finish %s\n", o->hashes);
     o->hashes_file = NULL;
-    if (o->record_file && fclose(o->record_file) != 0)
-        fprintf(stderr, "warning: cannot finish %s\n", o->record_path);
+    FILE *record = o->record_file;
+    if (record) {  /* where the play ended and why, for gbaport learn (a comment to inputs) */
+        fprintf(record, "# ended at frame %lu%s%s\n", (unsigned long)rt->frames,
+                end == GBA_END_ERROR ? ": " : "", end == GBA_END_ERROR ? rt->error : "");
+        if (fclose(record) != 0)
+            fprintf(stderr, "warning: cannot finish %s\n", o->record_path);
+    }
     o->record_file = NULL;
     if (o->registers) {
         GbaCtx *ctx = &rt->cpu;

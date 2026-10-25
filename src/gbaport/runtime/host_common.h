@@ -35,6 +35,7 @@ typedef struct {
     char record_path[1024];     /* record the keys there ("": do not) */
     void *record_file;          /* the open recording (a FILE *) */
     uint16_t recorded;          /* the keys it holds so far */
+    int record_by_default;      /* the window's own recording, not --record's */
 } HostOptions;
 
 /* Hands the keys to the game (gba_set_keys) and records them when they change. `waking`:
