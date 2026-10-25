@@ -2,11 +2,14 @@
  *
  *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--input FILE]
  *              [--registers] [--screenshot PATH] [--audio PATH] [--hashes PATH]
+ *              [--record PATH]
  *
  * The game's mGBA debug-log lines go to stdout, runtime warnings and errors to stderr.
  * Keys come only from --press and --input (host_common.c). --registers prints the CPU
  * registers when the run ends; --screenshot writes the last picture as a BMP file; --audio
- * writes the sound as a WAV file; --hashes writes each frame's picture hash.
+ * writes the sound as a WAV file; --hashes writes each frame's picture hash. --record
+ * writes the keys the game is given as an input file and, next to it as PATH.sav, the save
+ * it started from, so the run can be replayed (gbaport learn).
  * Exit status: 0 the game executed Stop and no scripted press was left to wake it, 2 bad
  * arguments, the wrong ROM or an unusable save file, 3 a runtime error (for example code
  * the recompiler did not find), 4 the frame limit was reached. */
@@ -20,7 +23,7 @@ static void on_frame(GbaRuntime *rt, void *user)
 {
     (void)user;
     host_frame(&options, rt);
-    gba_set_keys(rt, options.script_keys);
+    host_set_keys(&options, rt, options.script_keys, 0);
 }
 
 static void on_log(GbaRuntime *rt, int level, const char *text, void *user)
@@ -41,7 +44,7 @@ static int on_stopped(GbaRuntime *rt, void *user)
     (void)user;
     if (!host_script_wake(&options))
         return 0;
-    gba_set_keys(rt, options.script_keys);
+    host_set_keys(&options, rt, options.script_keys, 1);
     return 1;
 }
 

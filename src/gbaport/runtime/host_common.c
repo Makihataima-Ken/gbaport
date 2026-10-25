@@ -295,6 +295,9 @@ int host_parse(HostOptions *o, int argc, char **argv)
         } else if (strcmp(arg, "--audio") == 0 && value) {
             o->audio = value;
             i++;
+        } else if (strcmp(arg, "--record") == 0 && value) {
+            snprintf(o->record_path, sizeof o->record_path, "%s", value);
+            i++;
         } else if (strcmp(arg, "--registers") == 0) {
             o->registers = 1;
         } else if (o->window && strcmp(arg, "--scale") == 0 && value) {
@@ -313,13 +316,49 @@ int host_parse(HostOptions *o, int argc, char **argv)
         fprintf(stderr,
                 "usage: %s ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... "
                 "[--input FILE] [--registers] [--screenshot PATH] [--audio PATH] "
-                "[--hashes PATH]%s\n",
+                "[--hashes PATH] [--record PATH]%s\n",
                 argv[0], o->window ? " [--scale N] [--fast]" : "");
         return 2;
     }
     if (!o->save_path[0])
         default_save_path(o);
+    if (o->window && !o->record_path[0]) {  /* the window records play next to its save */
+        snprintf(o->record_path, sizeof o->record_path, "%s", o->save_path);
+        size_t n = strlen(o->record_path);
+        if (n > 4 && strcmp(o->record_path + n - 4, ".sav") == 0)
+            o->record_path[n - 4] = 0;
+        size_t room = sizeof o->record_path - strlen(o->record_path);
+        strncat(o->record_path, ".session.input", room - 1);
+    }
     return 0;
+}
+
+/* The recording (--record): the keys from now on (host_set_keys), and the save the game
+ * starts from as PATH.sav, or no such file when it starts blank. Returns 0, or -1 after
+ * printing what it could not write. */
+static int start_recording(HostOptions *o, const uint8_t *save, uint32_t size)
+{
+    char start[sizeof o->record_path + 4];
+    snprintf(start, sizeof start, "%s.sav", o->record_path);
+    FILE *f = open_file(o->record_path, "wb");
+    if (!f) {
+        fprintf(stderr, "error: cannot write %s\n", o->record_path);
+        return -1;
+    }
+    fprintf(f, "# recorded by gbaport: the keys the game was given (gbaport/inputs.py)\n");
+    fflush(f);
+    o->record_file = f;
+    if (!save) {
+        remove_file(start);
+        return 0;
+    }
+    FILE *copy = open_file(start, "wb");
+    int ok = copy && fwrite(save, 1, size, copy) == size;
+    if (copy)
+        ok = fclose(copy) == 0 && ok;
+    if (!ok)
+        fprintf(stderr, "error: cannot write %s\n", start);
+    return ok ? 0 : -1;
 }
 
 int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
@@ -344,7 +383,10 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
         fprintf(stderr, "error: %s: %s (the file was left as it is)\n", o->save_path, rt->error);
         return 2;
     }
+    int recording = o->record_path[0] ? start_recording(o, save, save_size) : 0;
     free(save);
+    if (recording != 0)
+        return 2;
     if (o->audio) {
         uint8_t header[44];
         wav_header(header, 0);
@@ -364,8 +406,27 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
     }
     while (o->next_press < o->press_count && o->presses[o->next_press].frame == 0)
         o->script_keys = o->presses[o->next_press++].keys;
-    gba_set_keys(rt, o->script_keys);
+    host_set_keys(o, rt, o->script_keys, 0);
     return 0;
+}
+
+void host_set_keys(HostOptions *o, GbaRuntime *rt, uint16_t keys, int waking)
+{
+    FILE *f = o->record_file;
+    if (f && keys != o->recorded) {
+        fprintf(f, "%lu ", (unsigned long)rt->frames + (waking ? 1 : 0));
+        if (!keys)
+            fprintf(f, "none");
+        for (int k = 0, first = 1; k < 10; k++)
+            if (keys >> k & 1) {
+                fprintf(f, "%s%s", first ? "" : "+", KEY_NAMES[k]);
+                first = 0;
+            }
+        fprintf(f, "\n");
+        fflush(f);  /* the app may be killed at any time */
+        o->recorded = keys;
+    }
+    gba_set_keys(rt, keys);
 }
 
 uint64_t host_picture_hash(const GbaRuntime *rt)
@@ -419,6 +480,9 @@ int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
     if (o->hashes_file && fclose(o->hashes_file) != 0)
         fprintf(stderr, "warning: cannot finish %s\n", o->hashes);
     o->hashes_file = NULL;
+    if (o->record_file && fclose(o->record_file) != 0)
+        fprintf(stderr, "warning: cannot finish %s\n", o->record_path);
+    o->record_file = NULL;
     if (o->registers) {
         GbaCtx *ctx = &rt->cpu;
         fprintf(stderr, "registers");

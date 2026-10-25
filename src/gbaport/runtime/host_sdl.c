@@ -2,7 +2,7 @@
  *
  *     game ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... [--input FILE]
  *              [--registers] [--screenshot PATH] [--audio PATH] [--hashes PATH]
- *              [--scale N] [--fast]
+ *              [--record PATH] [--scale N] [--fast]
  *
  * Keyboard: arrows, X = A, Z = B, A = L, S = R, Enter = Start, Backspace = Select. A
  * gamepad works too: its right face button is A, the bottom one B. The game runs at the
@@ -11,8 +11,10 @@
  * window ends the run with exit status 0. While the game is stopped (the BIOS Stop call)
  * the screen is dark and a key press wakes it, if the game asked for that; the save is
  * stored as it stops, since nothing changes it until then. In a run limited by --frames,
- * a Stop that no scripted press wakes ends the run instead. The other options and exit
- * statuses are those of host_headless.c.
+ * a Stop that no scripted press wakes ends the run instead. The play is recorded (--record)
+ * by default next to the save file: game.sav's is game.session.input, and the save it
+ * started from game.session.input.sav. The other options and exit statuses are those of
+ * host_headless.c.
  *
  * The sound plays on the default sound device: an SDL audio stream takes the GBA's
  * samples (32768 a second) and converts them to the device's rate. About three frames'
@@ -362,7 +364,7 @@ static void on_frame(GbaRuntime *rt, void *user)
 #endif
     host_frame(&options, rt);
     play_sound();
-    gba_set_keys(rt, held_keys());
+    host_set_keys(&options, rt, held_keys(), 0);
 }
 
 static void on_log(GbaRuntime *rt, int level, const char *text, void *user)
@@ -386,7 +388,7 @@ static int on_stopped(GbaRuntime *rt, void *user)
     present();
     SDL_RenderPresent(renderer);
     if (host_script_wake(&options)) {
-        gba_set_keys(rt, held_keys());
+        host_set_keys(&options, rt, held_keys(), 1);
         return 1;
     }
     if (options.frame_limit)  /* a run limited by --frames is scripted: end it, as headless */
@@ -402,7 +404,7 @@ static int on_stopped(GbaRuntime *rt, void *user)
         SDL_RenderPresent(renderer);
 #endif
         if (held_keys() != before) {
-            gba_set_keys(rt, held_keys());
+            host_set_keys(&options, rt, held_keys(), 1);
             paced = 0;  /* the clocks stood still: do not rush to catch up */
             return 1;
         }

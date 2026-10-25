@@ -32,7 +32,14 @@ typedef struct {
     uint16_t script_keys;       /* what the presses so far hold */
     uint8_t *rom;               /* the ROM (NULL: host_open reads rom_path) */
     uint32_t rom_size;
+    char record_path[1024];     /* record the keys there ("": do not) */
+    void *record_file;          /* the open recording (a FILE *) */
+    uint16_t recorded;          /* the keys it holds so far */
 } HostOptions;
+
+/* Hands the keys to the game (gba_set_keys) and records them when they change. `waking`:
+ * they wake the game from Stop, so a replay presses them then (host_script_wake). */
+void host_set_keys(HostOptions *o, GbaRuntime *rt, uint16_t keys, int waking);
 
 /* Reads the command line; prints the usage and returns 2 when it is wrong. */
 int host_parse(HostOptions *o, int argc, char **argv);
