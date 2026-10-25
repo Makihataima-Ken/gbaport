@@ -29,7 +29,8 @@ Out of scope:
 - Matching (byte-identical) decompilation.
 - Zero-input support for every ROM. Each game is expected to need a small `game.toml`.
 - Any runtime interpreter or JIT. Code the recompiler did not find is a build-time error
-  that names the address, fixed by adding it to `game.toml` (or by importing a trace).
+  that names the address, fixed by adding it to `game.toml`, by importing a trace, or by
+  `gbaport learn`, which replays recorded play natively to find it (Plan 7c).
 
 ## Key decisions
 
@@ -44,7 +45,9 @@ Out of scope:
    arm64 reserves the whole low 4 GB (`__PAGEZERO`), so GBA addresses cannot be mapped 1:1.
    Readable decompiled functions use the same accessors until their data is symbolized.
 4. **No runtime fallback.** Unknown indirect-branch targets abort with the address. Coverage
-   comes from static analysis, recorded traces and per-game overrides.
+   comes from static analysis (with an optional sweep of the code that follows code),
+   recorded traces, per-game overrides, and addresses learned by replaying recorded play
+   natively (`gbaport learn`, Plan 7c).
 5. **Emulators are dev-time test oracles only.** Unicorn (CPU semantics) and mGBA
    (whole-game lockstep) are used by tests and tools, never linked into a shipped app.
 6. **Python tooling, C11 runtime, clang everywhere.** Analysis and code generation are
@@ -174,6 +177,7 @@ CpuSet is detected and needs a `[[ram_code]]` entry only when detection misses i
 | Runtime (Plans 4–6) | Self-built test ROMs (clang `--target=armv4t-none-eabi` + `ld.lld`) and public GBA test suites (licence checked before vendoring) | Expected outputs and reference images |
 | Whole game (Plan 7+) | mGBA (dev only) | Per-frame framebuffer and RAM comparison on recorded input sequences |
 | Android (Plan 8) | Test ROMs on the Android emulator (dev only) | The app runs them; drawn buttons press keys; saves survive the app being killed; the frame rate holds |
+| Coverage (Plan 7c) | The native build itself | A recording of play replays with the same picture each frame, also one recorded on a phone; `gbaport learn` turns a run that stopped at missing code into one that gets through |
 | Decomp (Plan 10) | The recompiled function | Same inputs/state → same outputs/state, on states captured from real play |
 
 ## Roadmap
@@ -194,6 +198,7 @@ depends on what the earlier stages reveal.
 | P6 Audio | PSG + FIFO mixer, resampler, SDL3 audio output | Recorded-output comparisons on sound test ROMs | P4c |
 | P7 First game on desktop + lockstep harness | User's first game boots to gameplay natively; `gbaport verify` | N-frame input replay matches mGBA within tolerance | P4b, P5, P6 |
 | P8 Android | Gradle/NDK project generated per game, touch overlay, controller, lifecycle, saves | APK runs on device at 60 fps; save survives app kill | P7 |
+| P7c Playing on | Halfword switch tables, the sweep, rebuilds of what changed, recorded play, `gbaport learn` (also from a phone) | The first game plays a 60000-frame script natively with no missing code; a phone's recorded play replays on the PC | P8 |
 | P9 iOS | Xcode project via CMake generator, signing, same features as Android | IPA runs on device at 60 fps | P7, needs macOS |
 | P10 Decomp loop | Override mechanism, Ghidra headless export, Claude agent loop, function-level differential tester | Functions replaced with tests passing; game still verifies | P7 |
 | P11 Symbolized data (optional) | ROM tables → C structs, GBA pointers → native symbols in decompiled code | Decompiled modules no longer use raw GBA addresses | P10 |
