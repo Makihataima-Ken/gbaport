@@ -41,6 +41,7 @@ _DMA_NOT_A_PLAIN_COPY = 0x31E0  # CNT_H: start timing, or a source/destination t
 CPU_SET, CPU_FAST_SET = 0x0B, 0x0C
 LAST_BIOS_CALL = 0x2A  # the BIOS has SWIs 0x00-0x2A
 SEMIHOSTING = 0xAB  # Thumb debug-output SWI that devkits leave in shipped games
+THUMB_NOP = 0x46C0  # mov r8, r8: what GNU as pads Thumb code with
 _SUSPECT_ISSUES = frozenset({"undefined", "overlap", "enters_data", "mode_conflict", "misaligned"})
 # Exploration fields a guessed entry's walk adds to (only ever appended, in order).
 _JOURNALED = (
@@ -219,10 +220,10 @@ class _Explorer:
             after = ins.addr + ins.size
             if after in self.ex.instructions:
                 continue
-            while True:
+            while True:  # literal pools, then padding: zeros, or the nops GNU as pads with
                 if after in self.ex.literals:
                     after += self.ex.literals[after]
-                elif self.space.contains(after, 2) and self.space.read16(after) == 0:
+                elif self.space.contains(after, 2) and self.space.read16(after) in (0, THUMB_NOP):
                     after += 2
                 else:
                     break

@@ -12,6 +12,7 @@ from progkit import (
     KNOWN_JUMP,
     RECURSION,
     SWEEP,
+    SWEEP_NOP,
     THUMB_TABLE,
     UNBOUNDED_TABLE,
     VENEER,
@@ -410,6 +411,13 @@ def test_the_sweep_leaves_what_is_not_code_alone():
     ex = explore(space, [(0x080000C0, Mode.THUMB, "seed")], sweep=True)
     assert ex.entries == {0x080000C0: Mode.THUMB}
     assert sorted(ex.instructions) == [0x080000C0]  # and the zeros after it, to the ROM's end
+    assert ex.issues == []
+
+
+def test_the_sweep_skips_the_nops_gnu_as_pads_with():
+    ex = explore(program_space(SWEEP_NOP, thumb=True), [(0x080000C0, Mode.THUMB, "seed")],
+                 sweep=True)
+    assert ex.entry_kinds == {0x080000C0: "seed", 0x080000CC: "neighbour"}
     assert ex.issues == []
 
 

@@ -7,6 +7,7 @@ import re
 
 from romtest import build_test_rom, run_program, run_rom
 
+import gbaport.learn as learning
 from gbaport.analysis.config import learned_path, load_learned, write_learned
 from gbaport.cli import main
 from gbaport.rom.image import RomImage
@@ -95,6 +96,8 @@ def test_learn_stops_when_learning_does_not_help(tmp_path, monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "learned 0x08100000 (Thumb)" in captured.out
     assert "has 0x08100000 already, but it is still missing" in captured.err
+    assert "it is past the end of the ROM" in captured.err  # nothing there to recompile
+    assert "0x08100000" not in learned_path("ATST").read_text(encoding="utf-8")  # not kept
 
 
 def test_learn_says_when_the_replay_cannot_run(tmp_path, monkeypatch, capsys):
@@ -125,3 +128,11 @@ def test_learn_says_when_the_replay_does_not_stop_where_the_play_did(tmp_path, m
     assert main(["learn", "game.gba"]) == 1
     assert "the replay did not stop where the recorded play did (frame 20" in \
         capsys.readouterr().err
+
+
+def test_a_replay_that_takes_too_long_says_so(tmp_path, monkeypatch, capsys):
+    rom = game(tmp_path, monkeypatch, "hello")
+    run_rom(rom, frames=30, args=("--record", RECORDING))
+    monkeypatch.setattr(learning, "REPLAY_TIMEOUT", 0.001)
+    assert main(["learn", "game.gba"]) == 1
+    assert "the replay took more than 0.001 s" in capsys.readouterr().err

@@ -304,6 +304,21 @@ last:
     pop {pc}
 """
 
+# GNU as pads Thumb code with nops (mov r8, r8) to align a literal pool: the function after
+# the pool is found past them.
+#   c0 main (loads c8)   c6 nop   c8 literal   cc next
+SWEEP_NOP = """
+main:
+    movs r1, #0
+    ldr r0, lit
+    bx lr
+    .hword 0x46c0
+lit: .word 0x12345678
+next:
+    movs r0, #1
+    bx lr
+"""
+
 # The ARM compiler's Thumb switch through a table of halfwords: offsets, in halfwords,
 # from what the `add pc` reads as pc.
 #   cc dispatch (reads pc as d0)   d0 table 3, 4, 5   d6 c0   d8 c1   da c2   dc dflt

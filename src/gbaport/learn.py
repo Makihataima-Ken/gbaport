@@ -65,15 +65,29 @@ def learn(rom_path: Path, rom: RomImage, config: GameConfig, traces: tuple[Trace
         item = Learned(int(miss.group(1), 16), Mode.THUMB if miss.group(2) == "Thumb" else Mode.ARM,
                        int(miss.group(3)))
         entries = thumb if item.mode is Mode.THUMB else arm
-        if item.addr in entries:
+        if item.addr in entries:  # learning it did not help: it goes again
+            entries.remove(item.addr)
+            write_learned(learned, sha1, arm, thumb)
             raise LearnError(f"{learned} has 0x{item.addr:08x} already, but it is still missing: "
-                             f"{stopped}")
+                             f"{_why_missing(item.addr, len(rom.data))} ({stopped})")
         entries.append(item.addr)
         write_learned(learned, sha1, arm, thumb)
         found.append(item)
         log(f"learned 0x{item.addr:08x} ({'Thumb' if item.mode is Mode.THUMB else 'ARM'}), "
             f"missing at frame {item.frame}")
     raise LearnError(f"gave up after learning {MOST} addresses in one run")
+
+
+def _why_missing(addr: int, rom_size: int) -> str:
+    """Why learning ``addr`` could not help, and what might."""
+    region = addr >> 24
+    if region in (0x02, 0x03):
+        return ("the game runs it from RAM: add a [[ram_code]] entry to game.toml for the ROM "
+                "bytes it copies there")
+    if 0x08 <= region <= 0x0D and addr & 0x01FFFFFF >= rom_size:
+        return ("it is past the end of the ROM, so there is no code there: the game went "
+                "somewhere it should not have (a recording made with another build can do that)")
+    return "the analysis cannot decode code there"
 
 
 def recorded_end(recording: Path) -> tuple[int, str] | None:
@@ -100,12 +114,15 @@ def _replay(program: Path, rom_path: Path, recording: Path, start_save: Path | N
         save = Path(folder) / "game.sav"  # a copy: the replay must not change the start save
         if start_save is not None:
             shutil.copyfile(start_save, save)
-        result = subprocess.run(
-            [str(program), str(rom_path), "--input", str(recording), "--save", str(save),
-             "--frames", str(frames)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            timeout=REPLAY_TIMEOUT, check=False,
-        )
+        try:
+            result = subprocess.run(
+                [str(program), str(rom_path), "--input", str(recording), "--save", str(save),
+                 "--frames", str(frames)],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=REPLAY_TIMEOUT, check=False,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise LearnError(f"the replay took more than {REPLAY_TIMEOUT} s") from error
     if result.returncode in (0, 4):  # stopped with nothing to wake it, or the frame limit
         return ""
     if result.returncode != 3:  # bad arguments, an unusable save file, a crash
