@@ -6,7 +6,8 @@
  * enabled layer is drawn into a line of its own; then every pixel takes the colour of the
  * topmost layer there, or the backdrop, palette entry 0. The lower priority number is on
  * top; at equal priority sprites come before backgrounds, and BG0 before BG3. Forced blank
- * draws white.
+ * draws white. Lines are drawn a tile at a time, and composed by painting the layers
+ * bottom-up where no window, colour effect or semi-transparent sprite is on the line.
  *
  * Text backgrounds (BG0-BG3 in mode 0, BG0 and BG1 in mode 1) are 8x8 tiles named by a
  * map of 32x32 entries per 2 KiB screen block: 256 or 512 pixels each way, scrolled by
@@ -55,6 +56,8 @@
  * an internal reference point: BGxX/BGxY at the start of every frame and whenever the game
  * writes them, moved by (PB, PD) after every line drawn while the background is on. Along
  * a line, each pixel moves it by (PA, PC). */
+#include <string.h>
+
 #include "gba_runtime.h"
 
 #define IO(rt, offset) ((rt)->io[(offset) >> 1])
@@ -132,30 +135,40 @@ static void text_line(const GbaRuntime *rt, int n, int y, uint16_t *out)
         row += (in_y & 0x100) * 4;  /* 256x512: the lower half is the next block */
     else if (size == 3)
         row += (in_y & 0x100) * 8;  /* 512x512: two blocks further */
-    for (int x = 0; x < W; x++) {
-        unsigned in_x = (x + hofs) & 0x1FF;
+    unsigned in_x = hofs & 0x1FF;
+    for (int x = 0; x < W;) {  /* a tile at a time: its map entry and row once */
         uint32_t index = row + (in_x & 0xF8) / 8;
         if (size & 1)
             index += (in_x & 0x100) * 4;  /* the right half is the next block */
         uint32_t entry = halfword(rt->vram, screen_base + index * 2);
-        unsigned tx = in_x & 7, ty = in_y & 7;
-        if (entry & 0x400)
-            tx = 7 - tx;
-        if (entry & 0x800)
-            ty = 7 - ty;
-        uint32_t tile = entry & 0x3FF, address;
-        out[x] = CLEAR;
-        if (colors256)
-            address = char_base + tile * 64 + ty * 8 + tx;
-        else
-            address = char_base + tile * 32 + ty * 4 + tx / 2;
-        if (address >= 0x10000)
+        unsigned ty = entry & 0x800 ? 7 - (in_y & 7) : in_y & 7, flip = entry & 0x400 ? 7 : 0;
+        uint32_t tile = entry & 0x3FF;
+        uint32_t base = colors256 ? char_base + tile * 64 + ty * 8 : char_base + tile * 32 + ty * 4;
+        uint32_t bank = colors256 ? 0 : (entry >> 12) * 16;
+        if (!colors256 && base + 4 <= 0x10000) {  /* 16 colours: the tile's row in one word */
+            uint32_t pixels = rt->vram[base] | (uint32_t)rt->vram[base + 1] << 8 |
+                              (uint32_t)rt->vram[base + 2] << 16 | (uint32_t)rt->vram[base + 3] << 24;
+            const uint8_t *palette = rt->palette + bank * 2;
+            for (unsigned from = in_x & 7; from < 8 && x < W; from++, x++) {
+                unsigned color = (pixels >> ((from ^ flip) * 4)) & 15;
+                out[x] = color ? color_at(palette, color * 2) : CLEAR;
+            }
+            in_x = ((in_x | 7) + 1) & 0x1FF;
             continue;
-        unsigned color = rt->vram[address];
-        if (!colors256)
-            color = tx & 1 ? color >> 4 : color & 15;
-        if (color)
-            out[x] = color_at(rt->palette, (colors256 ? color : (entry >> 12) * 16 + color) * 2);
+        }
+        for (unsigned from = in_x & 7; from < 8 && x < W; from++, x++) {
+            unsigned tx = from ^ flip;
+            uint32_t address = colors256 ? base + tx : base + tx / 2;
+            out[x] = CLEAR;
+            if (address >= 0x10000)
+                continue;
+            unsigned color = rt->vram[address];
+            if (!colors256)
+                color = tx & 1 ? color >> 4 : color & 15;
+            if (color)
+                out[x] = color_at(rt->palette, (bank + color) * 2);
+        }
+        in_x = ((in_x | 7) + 1) & 0x1FF;  /* the next tile */
     }
     if (control & 0x40)
         hold(out, (mosaic & 15) + 1u);
@@ -439,21 +452,55 @@ static void compose(const GbaRuntime *rt, const Layers *layers, unsigned all, in
     unsigned any_second = (targets >> 8) & (0x20u | ((IO(rt, GBA_REG_DISPCNT) >> 8) & 0xFu));
     uint8_t region[W];
     window_line(rt, y, layers, region);
+    /* the order to look at the layers in, the same for every pixel: by priority, sprites
+     * before backgrounds and BG0 before BG3 at each (4 is the sprites, at priority p) */
+    uint8_t order[8], order_priority[8];
+    int count = 0;
+    for (unsigned priority = 0; priority < 4; priority++) {
+        if (all & 0x10) {
+            order[count] = 4;
+            order_priority[count++] = (uint8_t)priority;
+        }
+        for (int n = 0; n < 4; n++)
+            if ((all & (1u << n)) && (IO(rt, 0x08 + 2 * n) & 3) == priority)
+                order[count++] = (uint8_t)n;
+    }
+    int effects = effect != 0 && (targets & 0x3F) != 0;  /* an effect with a 1st target */
+    if (!(IO(rt, GBA_REG_DISPCNT) & 0xE000) && !effects && !memchr(layers->obj_semi, 1, W)) {
+        /* no windows, no colour effect any layer takes, no semi-transparent sprite on this
+         * line: each pixel is the topmost colour there, so paint the layers from the bottom up */
+        for (int x = 0; x < W; x++)
+            row[x] = backdrop;
+        for (int i = count - 1; i >= 0; i--) {
+            if (order[i] == 4) {
+                for (int x = 0; x < W; x++)
+                    if (layers->obj_priority[x] == order_priority[i] && layers->obj[x] != CLEAR)
+                        row[x] = layers->obj[x];
+            } else {
+                const uint16_t *line = layers->bg[order[i]];
+                for (int x = 0; x < W; x++)
+                    if (line[x] != CLEAR)
+                        row[x] = line[x];
+            }
+        }
+        return;
+    }
     for (int x = 0; x < W; x++) {
         unsigned enabled = all & region[x];
         int layer[2] = {5, 5}, found = 0;
         uint16_t color[2] = {backdrop, backdrop};
-        for (unsigned priority = 0; priority < 4 && found < 2; priority++) {
-            if ((enabled & 0x10) && layers->obj_priority[x] == priority && layers->obj[x] != CLEAR) {
-                layer[found] = 4;
-                color[found++] = layers->obj[x];
-            }
-            for (int n = 0; n < 4 && found < 2; n++) {
-                if ((enabled & (1u << n)) && (IO(rt, 0x08 + 2 * n) & 3) == priority &&
-                    layers->bg[n][x] != CLEAR) {
-                    layer[found] = n;
-                    color[found++] = layers->bg[n][x];
+        for (int i = 0; i < count && found < 2; i++) {
+            int n = order[i];
+            if (!(enabled & (1u << n)))
+                continue;
+            if (n == 4) {
+                if (layers->obj_priority[x] == order_priority[i] && layers->obj[x] != CLEAR) {
+                    layer[found] = 4;
+                    color[found++] = layers->obj[x];
                 }
+            } else if (layers->bg[n][x] != CLEAR) {
+                layer[found] = n;
+                color[found++] = layers->bg[n][x];
             }
         }
         int second = (targets >> 8) & (1u << layer[1]);
