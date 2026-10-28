@@ -31,6 +31,7 @@ typedef struct {
     TouchLayout layout;
     TouchFinger fingers[TOUCH_FINGERS];
     int count;
+    int hidden;  /* a gamepad is in use: the drawn buttons are out of the way */
 } TouchState;
 
 /* Lays the picture and the buttons out on a `width` x `height` screen whose `safe` part
@@ -41,5 +42,9 @@ void touch_move(TouchState *touch, uint64_t id, float x, float y);
 void touch_up(TouchState *touch, uint64_t id);
 /* The GBA keys the fingers hold (GBA key bits, 1 = pressed). */
 uint16_t touch_keys(const TouchState *touch);
+/* A gamepad's button hides the drawn buttons; a finger coming down (touch_down) or the
+ * gamepad going away shows them again. */
+void touch_gamepad_pressed(TouchState *touch);
+void touch_gamepad_removed(TouchState *touch);
 
 #endif

@@ -47,21 +47,43 @@ def adb(*args: str, serial: str | None = None, timeout: float = 120) -> str:
     return result.stdout
 
 
+ADVICE = {  # what to do about a device adb lists but cannot use
+    "unauthorized": "allow USB debugging from this computer on the phone (if it does not ask, "
+                    "unplug it and plug it in again)",
+    "offline": "unplug it and plug it in again",
+}
+
+
+def device_states() -> dict[str, str]:
+    """Each device adb lists, and its state ("device" when it is ready to use)."""
+    rows = (line.split() for line in adb("devices").splitlines()[1:])
+    return {row[0]: row[1] for row in rows if len(row) >= 2}
+
+
 def devices() -> list[str]:
     """The serial numbers of the devices adb sees, ready to use."""
-    lines = adb("devices").splitlines()[1:]
-    return [line.split()[0] for line in lines if line.strip().endswith("\tdevice")]
+    return [serial for serial, state in device_states().items() if state == "device"]
+
+
+def _not_ready(serial: str, state: str) -> str:
+    return f"{serial} is {state}: {ADVICE.get(state, 'adb cannot use it yet')}"
 
 
 def the_device() -> "Device":
-    """The one device adb sees; with several, the one ANDROID_SERIAL names."""
-    found = devices()
+    """The one device adb sees; with several, the one ANDROID_SERIAL names. A device adb
+    lists but cannot use yet (a phone waiting for permission, say) is named with what to do."""
+    states = device_states()
+    found = [serial for serial, state in states.items() if state == "device"]
     serial = os.environ.get("ANDROID_SERIAL")
     if serial:
+        if serial in states and serial not in found:
+            raise DeviceError(_not_ready(serial, states[serial]))
         if serial not in found:
             raise DeviceError(f"ANDROID_SERIAL is {serial}, but adb sees "
                               f"{', '.join(found) or 'no device'}")
         return Device(serial)
+    if not found and states:
+        raise DeviceError("; ".join(_not_ready(s, state) for s, state in states.items()))
     if not found:
         raise DeviceError("no Android device: connect a phone with USB debugging on, or "
                           "start an emulator")
@@ -115,9 +137,12 @@ class Device:
     def get_file(self, app: str, name: str) -> bytes | None:
         """A file from the app's own storage (its debug build lets adb in), or None when
         there is no such file."""
-        listed = self.adb("shell", f"run-as {shlex.quote(app)} ls {shlex.quote('files/' + name)} "
-                                   "2>/dev/null || true")
-        if not listed.strip():
+        path = f"files/{name}"
+        listed = self.adb("shell", f"run-as {shlex.quote(app)} ls {shlex.quote(path)} 2>&1 || true")
+        if listed.strip().startswith("run-as:"):  # unknown package, not debuggable
+            raise DeviceError(f"{app} is not installed on {self.serial}, or is not a debug build "
+                              f"({listed.strip()})")
+        if listed.strip() != path:
             return None
         command = [str(adb_program()), "-s", self.serial, "exec-out", "run-as", app, "cat",
                    f"files/{name}"]
@@ -201,6 +226,9 @@ def start_emulator(timeout: float = 600) -> tuple[Device, subprocess.Popen | Non
         except DeviceError:
             pass  # still booting
         time.sleep(2)
+    if process.poll() is not None:  # a locked virtual device, a missing hypervisor, ...
+        raise DeviceError(f"the emulator stopped (exit status {process.returncode}) before it "
+                          f"booted: see {home / 'emulator.log'}")
     stop_emulator(device, process)
     raise DeviceError(f"the emulator did not boot in {timeout} s (see {home / 'emulator.log'})")
 
@@ -215,7 +243,10 @@ def stop_emulator(device: Device, process: subprocess.Popen) -> None:
             subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
                            capture_output=True, check=False)
         else:
-            os.killpg(process.pid, signal.SIGKILL)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:  # gone already
+                pass
         process.wait(timeout=60)
 
 

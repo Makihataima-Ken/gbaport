@@ -214,3 +214,13 @@ def test_a_test_roms_app_holds_its_code_for_the_emulator_and_its_rom():
         assert zipped.getinfo("assets/game.gba").compress_type == zipfile.ZIP_STORED
         dex = b"".join(zipped.read(name) for name in names if name.endswith(".dex"))
     assert b"Lorg/gbaport/game/GameActivity;" in dex
+
+
+def test_odd_titles_and_game_codes_go_into_the_project_safely(tmp_path):
+    out = android.android_project(generated(tmp_path, "gba_code_08000000.c"), b"1", tmp_path / "p",
+                                  'A"\\B', '@Mo\\ "Best"\x01?', ("x86_64",), fake_sdl(tmp_path),
+                                  tmp_path / "sdk")
+    assert 'rootProject.name = "AB"' in (out / "settings.gradle").read_text(encoding="utf-8")
+    strings = out / "app" / "src" / "main" / "res" / "values" / "strings.xml"
+    assert '<string name="app_name">\\@Mo\\\\ \\"Best\\"?</string>' in \
+        strings.read_text(encoding="utf-8")

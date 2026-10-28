@@ -5,6 +5,8 @@
  *                              prints the picture's box, the D-pad and each button's box
  *     down ID X Y | move ID X Y | up ID
  *     keys                     prints the keys held, "A+RIGHT" or "none"
+ *     gamepad | unplug         a gamepad's button pressed, the gamepad gone
+ *     shown                    prints whether the drawn buttons show: "shown" or "hidden"
  */
 #define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
@@ -42,6 +44,12 @@ int main(void)
             touch_move(&touch, id, a, b);
         } else if (strcmp(command, "up") == 0 && sscanf(line, "%*s %llu", &id) == 1) {
             touch_up(&touch, id);
+        } else if (strcmp(command, "gamepad") == 0) {
+            touch_gamepad_pressed(&touch);
+        } else if (strcmp(command, "unplug") == 0) {
+            touch_gamepad_removed(&touch);
+        } else if (strcmp(command, "shown") == 0) {
+            printf("%s\n", touch.hidden ? "hidden" : "shown");
         } else if (strcmp(command, "keys") == 0) {
             unsigned keys = touch_keys(&touch);
             int first = 1;

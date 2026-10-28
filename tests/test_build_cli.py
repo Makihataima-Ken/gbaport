@@ -97,3 +97,35 @@ def test_an_input_file_is_for_install(tmp_path, capsys):
     command = ["build", str(rom_path), "--host", "android", "--input", str(tmp_path / "game.input")]
     assert main(command) == 1
     assert "--input is for --install" in capsys.readouterr().err
+
+
+class Phone:
+    """A device that says which processor it has, and nothing more."""
+    serial = "R58N123"
+
+    def __init__(self, abi: str):
+        self.processor = abi
+
+    def abi(self) -> str:
+        return self.processor
+
+
+@pytest.mark.parametrize("abi, options, message", [
+    ("armeabi-v7a", (), "R58N123 runs armeabi-v7a code; gbaport builds for arm64-v8a and x86_64"),
+    ("arm64-v8a", ("--abi", "x86_64"),
+     "R58N123 runs arm64-v8a code: build with --abi arm64-v8a, or with no --abi"),
+])
+def test_install_checks_the_devices_processor_before_the_long_build(tmp_path, capsys, monkeypatch,
+                                                                    abi, options, message):
+    monkeypatch.setattr(cli, "the_device", lambda: Phone(abi))
+    monkeypatch.setattr(cli, "android_project", lambda *args: tmp_path / "project")
+    monkeypatch.setattr(cli, "build_apk", lambda project, path, log=print: path)
+    monkeypatch.setattr(cli, "sdl3_source", lambda: tmp_path / "sdl")
+    monkeypatch.setattr(cli, "android_sdk", lambda: tmp_path / "sdk")
+    rom_path = tmp_path / "hello.gba"
+    rom_path.write_bytes(build_test_rom("hello").data)
+    command = ["build", str(rom_path), "--host", "android", "--install", "--out", str(tmp_path / "out")]
+    assert main([*command, *options]) == 1
+    printed = capsys.readouterr()
+    assert message in printed.err
+    assert "functions" not in printed.out  # it stopped before recompiling

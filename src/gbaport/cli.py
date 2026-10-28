@@ -350,6 +350,14 @@ def _run_build(args: argparse.Namespace) -> int:
     if args.input:
         load_input(args.input)  # a bad input file stops here, with its line
     device = the_device() if args.install else None  # before the long build: is one there?
+    if device is not None:  # and can it run what gbaport builds?
+        abi = device.abi()
+        if abi not in ANDROID_ABIS:
+            raise ValueError(f"{device.serial} runs {abi} code; gbaport builds for "
+                             f"{' and '.join(ANDROID_ABIS)}")
+        if args.abi and abi not in args.abi:
+            raise ValueError(f"{device.serial} runs {abi} code: build with --abi {abi}, or with "
+                             "no --abi")
     _recompile(args, rom, root / "generated")
     if args.host == "android":
         return _build_android(args, rom, root, device)
@@ -365,9 +373,6 @@ def _build_android(args: argparse.Namespace, rom: RomImage, root: Path, device) 
     installed on ``device`` and started, if there is one."""
     header = parse_header(rom)
     abis = tuple(dict.fromkeys(args.abi)) or ((device.abi(),) if device else ("arm64-v8a",))
-    if abis[0] not in ANDROID_ABIS:
-        raise ValueError(f"{device.serial} runs {abis[0]} code; gbaport builds for "
-                         f"{' and '.join(ANDROID_ABIS)}")
     sdk = android_sdk()
     project = android_project(root / "generated", rom.data, root / "build" / "android",
                               header.game_code, header.title, abis, sdl3_source(), sdk)

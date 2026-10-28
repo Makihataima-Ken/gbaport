@@ -123,3 +123,9 @@ def test_an_eleventh_finger_holds_nothing_and_its_coming_up_changes_nothing():
     out = touch(PHONE, *resting, f"down 10 {sx} {sy}", "keys", "up 10", "up 3",
                 f"down 11 {ax} {ay}", "keys")
     assert out[-2:] == ["none", "A"]
+
+
+def test_a_gamepad_hides_the_buttons_until_a_finger_comes_down_or_it_is_unplugged():
+    seen = touch(PHONE, "shown", "gamepad", "shown", "down 1 1200 540", "shown", "up 1",
+                 "gamepad", "unplug", "shown")
+    assert seen[-4:] == ["shown", "hidden", "shown", "shown"]

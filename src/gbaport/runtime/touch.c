@@ -77,6 +77,7 @@ static TouchFinger *find(TouchState *touch, uint64_t id)
 
 void touch_down(TouchState *touch, uint64_t id, float x, float y)
 {
+    touch->hidden = 0;  /* touching the screen brings the drawn buttons back */
     TouchFinger *finger = find(touch, id);
     if (!finger) {
         if (touch->count == TOUCH_FINGERS)
@@ -110,4 +111,14 @@ uint16_t touch_keys(const TouchState *touch)
     for (int i = 0; i < touch->count; i++)
         keys |= finger_keys(&touch->layout, &touch->fingers[i]);
     return keys;
+}
+
+void touch_gamepad_pressed(TouchState *touch)
+{
+    touch->hidden = 1;
+}
+
+void touch_gamepad_removed(TouchState *touch)
+{
+    touch->hidden = 0;
 }

@@ -203,8 +203,9 @@ def android_project(sources: Path, rom: bytes, out: Path, game_code: str, label:
     (main / "assets" / "game.gba").write_bytes(rom)
     units = [f"generated/{path.name}" for path in sorted((cpp / "generated").glob("*.c"))]
     units += [f"runtime/{name}" for name in (*RUNTIME_SOURCES, *HOST_SOURCES)]
+    name = "".join(c for c in game_code if c.isascii() and c.isalnum()) or "game"
     values = {
-        "NAME": game_code or "game", "LABEL": _xml(label or game_code or "gbaport"),
+        "NAME": name, "LABEL": _resource_string(label or game_code or "gbaport"),
         "ANDROID_PLUGIN": ANDROID_PLUGIN, "PLATFORM": str(PLATFORM), "BUILD_TOOLS": BUILD_TOOLS,
         "NDK": NDK, "CMAKE": CMAKE, "APPLICATION_ID": application_id(game_code),
         "ABIS": ", ".join(f"'{abi}'" for abi in abis), "SDL3_SOURCE": sdl.as_posix(),
@@ -223,8 +224,13 @@ def android_project(sources: Path, rom: bytes, out: Path, game_code: str, label:
     return out
 
 
-def _xml(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "\\'")
+def _resource_string(text: str) -> str:
+    """``text`` as an Android string resource: XML's escapes, then Android's (backslash,
+    quotes, a leading @ or ?), without control characters."""
+    text = "".join(c for c in text if c.isprintable())
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = text.replace("\\", "\\\\").replace('"', '\\"').replace("'", "\\'")
+    return "\\" + text if text[:1] in ("@", "?") else text
 
 
 def build_apk(project: Path, apk: Path, log: Log = print) -> Path:

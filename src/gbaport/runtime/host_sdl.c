@@ -83,7 +83,6 @@ static const SDL_GamepadButton BUTTONS[10] = {
 static const char *const BUTTON_NAMES[TOUCH_BUTTONS] = {"A", "B", "SELECT", "START", "R", "L"};
 static const uint16_t BUTTON_KEYS[TOUCH_BUTTONS] = {1u << 0, 1u << 1, 1u << 2, 1u << 3, 1u << 8, 1u << 9};
 static TouchState touch;
-static int touch_hidden;       /* a gamepad is in use: the drawn buttons are out of the way */
 static int screen_w, screen_h;  /* in pixels */
 static Uint64 awake, busy, running, drawing, showing, report_start;  /* the frame rate report */
 static unsigned report_frames;
@@ -242,7 +241,6 @@ static void handle(const SDL_Event *event)
     switch (event->type) {
     case SDL_EVENT_FINGER_DOWN:
         touch_down(&touch, finger->fingerID, finger->x * screen_w, finger->y * screen_h);
-        touch_hidden = 0;
         break;
     case SDL_EVENT_FINGER_MOTION:
         touch_move(&touch, finger->fingerID, finger->x * screen_w, finger->y * screen_h);
@@ -252,7 +250,10 @@ static void handle(const SDL_Event *event)
         touch_up(&touch, finger->fingerID);
         break;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-        touch_hidden = 1;
+        touch_gamepad_pressed(&touch);
+        break;
+    case SDL_EVENT_GAMEPAD_REMOVED:
+        touch_gamepad_removed(&touch);
         break;
     case SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED:
     case SDL_EVENT_WINDOW_SAFE_AREA_CHANGED:
@@ -317,7 +318,7 @@ static void present(void)
 #if MOBILE
     TouchBox s = touch.layout.screen;
     SDL_RenderTexture(renderer, texture, NULL, &(SDL_FRect){s.x, s.y, s.w, s.h});
-    if (!touch_hidden)
+    if (!touch.hidden)
         draw_buttons(touch_keys(&touch));
 #else
     SDL_RenderTexture(renderer, texture, NULL, NULL);
