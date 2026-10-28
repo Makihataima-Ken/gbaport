@@ -123,14 +123,17 @@ def test_going_to_the_background_stores_the_save_and_pauses_the_game(phone):
 
 def test_the_app_keeps_the_gbas_frame_rate_and_says_so(phone):
     launch(phone, "keys_log")
-    rate = r"^([\d.]+) frames a second; the game took ([\d.]+) ms a frame$"
+    rate = (r"^([\d.]+) frames a second; the game took ([\d.]+) ms a frame "
+            r"\(running ([\d.]+), drawing ([\d.]+), showing ([\d.]+)\)$")
     phone.wait_for(rate, timeout=30)
     deadline = time.monotonic() + 30
     while len(rates := [re.match(rate, line) for line in phone.log() if re.match(rate, line)]) < 2:
         assert time.monotonic() < deadline
         time.sleep(1)
     assert 59.2 <= float(rates[1].group(1)) <= 60.2  # the first ten seconds hold the start-up
-    assert float(rates[1].group(2)) < 16.7
+    took, parts = float(rates[1].group(2)), [float(rates[1].group(n)) for n in (3, 4, 5)]
+    assert took < 16.7
+    assert abs(sum(parts) - took) < 0.15  # where the time went: the game, the picture, the screen
     phone.stop(APP)
 
 

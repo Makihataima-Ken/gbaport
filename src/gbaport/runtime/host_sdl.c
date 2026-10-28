@@ -30,9 +30,9 @@
  * any time) and when it closes, besides once a second while it changes, so it survives
  * the app being killed; in the background the game is paused. Everything the game and the
  * runtime print goes to the system log (logcat, tag "gbaport"), with the frame rate and
- * how much of each frame's time the game took every ten seconds; a run that ends with an
- * error shows it before the app closes. The options come from the app's intent
- * (GameActivity.java). */
+ * how much of each frame's time the game took every ten seconds (running the game,
+ * drawing the picture, handing it to the screen); a run that ends with an error shows it
+ * before the app closes. The options come from the app's intent (GameActivity.java). */
 #include <stdio.h>
 #include <string.h>
 
@@ -85,7 +85,7 @@ static const uint16_t BUTTON_KEYS[TOUCH_BUTTONS] = {1u << 0, 1u << 1, 1u << 2, 1
 static TouchState touch;
 static int touch_hidden;       /* a gamepad is in use: the drawn buttons are out of the way */
 static int screen_w, screen_h;  /* in pixels */
-static Uint64 awake, busy, report_start;  /* for the frame rate report */
+static Uint64 awake, busy, running, drawing, showing, report_start;  /* the frame rate report */
 static unsigned report_frames;
 
 /* stdout and stderr go nowhere on Android: a thread passes their lines to logcat. */
@@ -199,21 +199,29 @@ static void draw_buttons(uint16_t keys)
 }
 
 /* Every 600 frames (ten seconds): how many frames a second came, and how long the game
- * took a frame (the rest of the frame's time goes to waiting for the next one). `waited`
- * is when this frame's wait began; `awake`, when the last one ended. */
-static void report_rate(Uint64 waited)
+ * took a frame (the rest of the frame's time goes to waiting for the next one), in three
+ * parts: running the game up to the frame's end (`ran`), drawing the picture (`drawn`)
+ * and handing it to the screen, which may wait for the display (`waited`, when this
+ * frame's wait began). `awake` is when the last frame's wait ended. */
+static void report_rate(Uint64 ran, Uint64 drawn, Uint64 waited)
 {
-    if (awake)
+    if (awake) {
         busy += waited - awake;
+        running += ran - awake;
+        drawing += drawn - ran;
+        showing += waited - drawn;
+    }
     if (report_frames == 0)
         report_start = waited;
     if (++report_frames == 601) {
         double seconds = (double)(waited - report_start) / 1e9;
-        printf("%.2f frames a second; the game took %.1f ms a frame\n", 600 / seconds,
-               (double)busy / 600 / 1e6);
+        printf("%.2f frames a second; the game took %.1f ms a frame (running %.2f, drawing "
+               "%.2f, showing %.2f)\n", 600 / seconds, (double)busy / 600 / 1e6,
+               (double)running / 600 / 1e6, (double)drawing / 600 / 1e6,
+               (double)showing / 600 / 1e6);
         report_frames = 1;
         report_start = waited;
-        busy = 0;
+        busy = running = drawing = showing = 0;
     }
 }
 #endif
@@ -347,17 +355,23 @@ static void on_frame(GbaRuntime *rt, void *user)
 {
     (void)user;
     SDL_Event event;
+#if MOBILE
+    Uint64 ran = SDL_GetTicksNS();
+#endif
     while (SDL_PollEvent(&event))
         handle(&event);
     if (closed)
         gba_end(rt, GBA_END_HOST);
     gba_screen(rt, pixels);
     present();
+#if MOBILE
+    Uint64 drawn = SDL_GetTicksNS();
+#endif
     SDL_RenderPresent(renderer);
 #if MOBILE
     Uint64 waited = SDL_GetTicksNS();
     pace();
-    report_rate(waited);
+    report_rate(ran, drawn, waited);
     awake = SDL_GetTicksNS();
 #else
     pace();
