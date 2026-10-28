@@ -28,7 +28,9 @@ FAKE_SDKMANAGER = textwrap.dedent("""\
         calls.write(f"{len(answers)} answers:")
         for package in Path(args["--package_file"]).read_text(encoding="utf-8").split():
             calls.write(" " + package)
-            if "broken" not in package:
+            if "broken" in package:  # says why in bytes that are not text in any code page
+                sys.stdout.buffer.write(b"\\x81\\x8d cannot install " + package.encode() + b"\\n")
+            else:
                 folder = sdk.joinpath(*package.split(";"))
                 folder.mkdir(parents=True, exist_ok=True)
                 (folder / "source.properties").write_text("Pkg.Revision=1\\n", encoding="utf-8")
@@ -81,8 +83,8 @@ def test_installing_says_it_accepts_googles_licence(cache):
 def test_a_package_that_does_not_install_is_named(cache, monkeypatch):
     fake_sdk(cache)
     monkeypatch.setattr(android, "SDK_PACKAGES", ("platform-tools", "broken;1"))
-    with pytest.raises(ToolchainError, match=r"installing broken;1 failed"):
-        android.android_sdk(log=quiet)
+    with pytest.raises(ToolchainError, match=r"installing broken;1 failed[\s\S]*cannot install broken;1"):
+        android.android_sdk(log=quiet)  # its words, whatever bytes they come in
 
 
 def test_a_download_must_match_its_published_digest(tmp_path):
@@ -102,6 +104,19 @@ def test_a_download_that_fails_says_what_it_was(tmp_path):
     with pytest.raises(ToolchainError, match="cannot download"):
         android._download((tmp_path / "nothing.zip").as_uri(), tmp_path / "x.zip", "0" * 64)
     assert not (tmp_path / "x.zip.partial").exists()
+
+
+def test_a_download_gives_up_on_a_server_that_stops_answering(tmp_path, monkeypatch):
+    asked = {}
+
+    def stalls(url, timeout=None):
+        asked["timeout"] = timeout
+        raise TimeoutError("timed out")
+
+    monkeypatch.setattr(android.urllib.request, "urlopen", stalls)
+    with pytest.raises(ToolchainError, match="cannot download .*timed out"):
+        android._download("https://dl.google.com/x.zip", tmp_path / "x.zip", "0" * 64)
+    assert asked["timeout"] == android.DOWNLOAD_TIMEOUT  # a stalled server ends it, not hangs it
 
 
 def test_gradle_and_sdl3s_source_come_unpacked_into_the_cache(cache, monkeypatch, tmp_path):

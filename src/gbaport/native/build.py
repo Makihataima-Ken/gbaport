@@ -8,6 +8,7 @@ compiles those sources together with the runtime in ``gbaport/runtime`` and one 
 ``sdl`` (a window, with SDL3 from ``sdl3.py``) or ``headless`` (for tests and scripts).
 """
 
+import functools
 import hashlib
 import os
 import subprocess
@@ -78,6 +79,14 @@ def write_sources(files: dict[str, str], out: Path) -> None:
             path.write_text(text, encoding="utf-8", newline="\n")
 
 
+@functools.cache
+def compiler_version(clang: str) -> str:
+    """``clang --version``'s first line: part of every object's key, so a compiler updated
+    in place compiles everything again."""
+    result = subprocess.run([clang, "--version"], capture_output=True, text=True, check=False)
+    return (result.stdout.splitlines() or [""])[0]
+
+
 def compile_native(sources: Path, out: Path, name: str, host: str = "headless",
                    log: Callable[[str], None] = print) -> Path:
     """Compile the generated ``sources`` with the runtime and ``host``; returns the program.
@@ -88,7 +97,7 @@ def compile_native(sources: Path, out: Path, name: str, host: str = "headless",
     objects = out / "obj"
     objects.mkdir(parents=True, exist_ok=True)
     units = [*sorted(sources.glob("*.c")), *(RUNTIME / s for s in (*RUNTIME_SOURCES, *HOSTS[host]))]
-    headers = hashlib.sha1()
+    headers = hashlib.sha1(compiler_version(clang).encode())  # a new clang compiles all again
     for header in sorted([*sources.glob("*.h"), *RUNTIME.glob("*.h")]):
         headers.update(header.name.encode() + b"\0" + header.read_bytes())
     fresh: list[str] = []

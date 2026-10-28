@@ -34,6 +34,16 @@ def test_a_rebuild_compiles_only_the_files_that_changed(tmp_path):
     assert program.exists()
 
 
+def test_another_compiler_compiles_everything_again(tmp_path, monkeypatch):
+    _sources(tmp_path)
+    said = []
+    native.compile_native(tmp_path / "generated", tmp_path / "build", "game", log=said.append)
+    monkeypatch.setattr(native, "compiler_version", lambda clang: "clang version 99.0.0")
+    native.compile_native(tmp_path / "generated", tmp_path / "build", "game", log=said.append)
+    total = int(said[0].split()[3])
+    assert said[-1] == f"compiled {total} of {total} files"  # an LLVM update in place, say
+
+
 def test_writing_the_same_sources_again_leaves_their_files_alone(tmp_path):
     native.write_sources({"gba_code_08000000.c": "a", "gba_code_08002000.c": "b",
                           "gba_dispatch.c": "c"}, tmp_path)

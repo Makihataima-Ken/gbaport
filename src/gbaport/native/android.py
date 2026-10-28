@@ -55,6 +55,7 @@ COMMAND_LINE_TOOLS = {  # version 23.0: archive and SHA-1, as Google's repositor
     "darwin": ("commandlinetools-mac_arm64-16111833_latest.zip", "ad03dc49bfacfd52c110b14104ea548b8a07e830"),
 }
 LICENCE = "https://developer.android.com/studio/terms"
+DOWNLOAD_TIMEOUT = 120  # seconds a stalled download waits for the next bytes
 
 Log = Callable[[str], None]
 
@@ -86,7 +87,8 @@ def install_packages(sdk: Path, packages: list[str], log: Log = print) -> None:
     try:
         result = subprocess.run(
             [str(_sdkmanager(sdk)), f"--sdk_root={sdk}", f"--package_file={listing}"],
-            input="y\n" * 50, capture_output=True, text=True, env=java_environment(), check=False,
+            input="y\n" * 50, capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=java_environment(), check=False,
         )
     finally:
         listing.unlink()
@@ -141,7 +143,7 @@ def _download(url: str, path: Path, digest: str, kind: str = "sha256") -> Path:
     partial = path.with_name(path.name + ".partial")
     hasher = hashlib.new(kind)
     try:
-        with urllib.request.urlopen(url) as response, open(partial, "wb") as out:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT) as response, open(partial, "wb") as out:
             while chunk := response.read(1 << 20):
                 hasher.update(chunk)
                 out.write(chunk)
