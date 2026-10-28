@@ -201,9 +201,9 @@ screen, held sideways, and draws the GBA's buttons over the picture:
 - A and B on the right (a finger between them holds both);
 - L and R in the top corners, Select and Start at the bottom.
 
-A gamepad works as on the desktop. Pressing one of its buttons hides the drawn ones, and
-touching the screen brings them back. The back button leaves the app as the home button
-does.
+A gamepad works as on the desktop. Pressing one of its buttons hides the drawn ones;
+touching the screen, or the gamepad going away, brings them back. The back button leaves
+the app as the home button does.
 
 The save lives in the app's own storage. It is stored once a second while the game
 changes it, when the game stops (the BIOS Stop call), when the app goes to the
@@ -211,11 +211,12 @@ background, where Android may kill it at any time, and when the app ends. In the
 background the game is paused. Uninstalling the app deletes its save.
 
 What the game and the runtime print goes to Android's log, with the frame rate every ten
-seconds:
+seconds and where each frame's time went: running the game, drawing the picture, and
+handing it to the screen (which can wait there for the display):
 
     %LOCALAPPDATA%\gbaport\android-sdk\platform-tools\adb logcat -s gbaport
 
-    59.73 frames a second; the game took 3.1 ms a frame
+    59.73 frames a second; the game took 2.6 ms a frame (running 1.20, drawing 0.22, showing 1.17)
 
 A runtime error, or one that stops the game from starting (a save file of the wrong
 size), shows its message on the screen; the app ends when it is closed.

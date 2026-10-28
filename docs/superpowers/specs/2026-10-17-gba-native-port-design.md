@@ -151,6 +151,7 @@ thumb_entries = [0x08012345]
 data = [[0x08100000, 0x08180000]]           # ranges that are never code
 jump_tables = [{ at = 0x0801F00C, table = 0x0801F010, count = 12 }]  # at = the dispatch instruction
 scan_pointers = true           # guess entries from ROM words pointing at function starts
+sweep = true                   # guess the code that follows code (default false; Plan 7c)
 
 [[ram_code]]                   # blobs copied from ROM to RAM and executed there
 rom = 0x080F0000
@@ -166,6 +167,8 @@ Traces recorded with `gbaport trace` (gbaport's mGBA playing an input file, or m
 GDB server while someone plays) live next to it in `games/<game_code>/traces/*.trace`
 (addresses only) and are read automatically. Code the game copies into RAM with DMA or
 CpuSet is detected and needs a `[[ram_code]]` entry only when detection misses it.
+`games/<game_code>/learned.toml`, which `gbaport learn` writes (the ROM's sha1 and the
+entries it learned by replaying recorded play), is read together with `game.toml`.
 
 ## Verification strategy
 

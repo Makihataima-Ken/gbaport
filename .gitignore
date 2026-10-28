@@ -2,6 +2,8 @@
 roms/
 *.gba
 *.sav
+# recordings of play the window and the phone make (key presses only)
+*.session.input
 games/*/generated/
 build/
 
