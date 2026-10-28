@@ -7,6 +7,7 @@ from gbaport.native.device import Device, DeviceError
 
 
 def adb_says(monkeypatch, text: str) -> None:
+    monkeypatch.delenv("ANDROID_SERIAL", raising=False)  # the stand-in adb names its own device
     monkeypatch.setattr(device, "adb", lambda *args, **kwargs: text)
 
 
