@@ -51,7 +51,7 @@ Out of scope:
 5. **Emulators are dev-time test oracles only.** Unicorn (CPU semantics) and mGBA
    (whole-game lockstep) are used by tests and tools, never linked into a shipped app.
 6. **Python tooling, C11 runtime, clang everywhere.** Analysis and code generation are
-   Python 3.13 (managed by uv). Generated code and runtime are C11 built with clang — the
+   Python 3.15 (managed by uv). Generated code and runtime are C11 built with clang — the
    same compiler family the Android NDK and Xcode use.
 7. **SDL3 platform layer** for window, input, audio and app lifecycle on desktop, Android
    and iOS, so one host codebase serves all three.
@@ -208,13 +208,13 @@ depends on what the earlier stages reveal.
 
 ## Toolchain
 
-Already on the development machine (Windows 11): uv 0.11.32 with CPython 3.13.14, Git 2.51,
+Already on the development machine (Windows 11): uv 0.11.32 with CPython 3.15.0b4, Git 2.51,
 MSVC Build Tools 14.44 (bundles CMake), OpenJDK 17, Node 26, LLVM 23.1.3 (clang + lld,
 installed for Plan 3).
 
 Needed later:
 
-- Unicorn 2.1.3 (Python dev dependency, the lifter's oracle) — added in Plan 3.
+- Unicorn 2.1.4 (Python dev dependency, the lifter's oracle) — added in Plan 3.
 - CMake ≥ 3.28 and Ninja (bundled with the MSVC Build Tools; elsewhere
   `winget install Kitware.CMake Ninja-build.Ninja`) — Plan 4c, for SDL3. Games still
   build with clang directly.
