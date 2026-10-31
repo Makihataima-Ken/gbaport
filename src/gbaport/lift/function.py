@@ -182,8 +182,11 @@ class _FunctionLifter:
         return after | 1 if ins.mode is Mode.THUMB else after
 
     def _call(self, target: int, ret: int, mode: Mode) -> str:
-        """A call to a constant target: direct when that function was recompiled."""
-        if target in self.program.functions:
+        """A call to a constant target: direct when that function was recompiled, in the
+        state of the call (a Thumb call to code recompiled as ARM goes to the dispatcher,
+        which hands it to the interpreter)."""
+        called = self.program.functions.get(target)
+        if called is not None and called.mode is mode:
             return f"gba_call_direct(ctx, {function_name(target, self.prefix)}, {hexu(ret)});"
         return f"gba_call(ctx, {hexu(_in_state(target, mode))}, {hexu(ret)});"
 

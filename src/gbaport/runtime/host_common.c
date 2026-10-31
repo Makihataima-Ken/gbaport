@@ -362,6 +362,8 @@ int host_parse(HostOptions *o, int argc, char **argv)
         } else if (strcmp(arg, "--places") == 0 && value) {
             snprintf(o->places_path, sizeof o->places_path, "%s", value);
             i++;
+        } else if (strcmp(arg, "--interpret-all") == 0) {
+            o->interpret_all = 1;
         } else if (strcmp(arg, "--registers") == 0) {
             o->registers = 1;
         } else if (o->window && strcmp(arg, "--scale") == 0 && value) {
@@ -380,7 +382,7 @@ int host_parse(HostOptions *o, int argc, char **argv)
         fprintf(stderr,
                 "usage: %s ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... "
                 "[--input FILE] [--registers] [--screenshot PATH] [--audio PATH] "
-                "[--hashes PATH] [--record PATH] [--places PATH]%s\n",
+                "[--hashes PATH] [--record PATH] [--places PATH] [--interpret-all]%s\n",
                 argv[0], o->window ? " [--scale N] [--fast]" : "");
         return 2;
     }
@@ -445,6 +447,7 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
         fprintf(stderr, "error: %s\n", rt->error);
         return 2;
     }
+    rt->interpret_all = o->interpret_all;
     load_places(o, rt);
     uint32_t save_size;
     uint8_t *save = read_file(o->save_path, &save_size);

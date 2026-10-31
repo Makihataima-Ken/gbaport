@@ -38,6 +38,7 @@ typedef struct {
     int record_by_default;      /* the window's own recording, not --record's */
     char places_path[1024];     /* keep the places code ran interpreted there ("": do not) */
     uint32_t places_stored;     /* how many of them the file holds */
+    int interpret_all;          /* --interpret-all: no recompiled code runs */
 } HostOptions;
 
 /* Hands the keys to the game (gba_set_keys) and records them when they change. `waking`:

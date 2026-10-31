@@ -19,12 +19,15 @@ REGISTERS = {"thumb": 7}  # the register with the result: r12, except in thumb.g
 ALL_PASSED = "ae000eb0c97cf8ac296246c6d9eee1d1d2e1d428"  # SHA-1 of that picture's screenshot
 
 
+@pytest.mark.parametrize("how", ["recompiled", "interpreted"])
 @pytest.mark.parametrize(
     "name", ["arm", "thumb", "memory", "bios", "sram", "flash64", "flash128", "none"]
 )
-def test_jsmolka_rom_passes(name, tmp_path):
+def test_jsmolka_rom_passes(name, how, tmp_path):
     shot = tmp_path / "screen.bmp"
     args = ("--registers", "--screenshot", str(shot))
+    if how == "interpreted":
+        args += ("--interpret-all",)
     run = romtest.run_rom(jsmolka_rom(name), frames=120, args=args)
     assert run.status == 4, run.stderr
     register = REGISTERS.get(name, 12)

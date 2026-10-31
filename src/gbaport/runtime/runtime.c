@@ -38,6 +38,9 @@ int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *h
     return 0;
 }
 
+/* --interpret-all: every address goes to gba_missing, so the interpreter runs it all. */
+static GbaFn interpret_everything(GbaCtx *ctx, uint32_t addr) { return gba_missing(ctx, addr); }
+
 /* The CPU state the BIOS leaves for the game: system mode, its stacks set, r0-r12 zero. */
 static void reset_cpu(GbaRuntime *rt)
 {
@@ -46,8 +49,8 @@ static void reset_cpu(GbaRuntime *rt)
     memset(ctx, 0, sizeof *ctx);
     ctx->cycles = cycles;
     ctx->interpreted = interpreted;
-    ctx->lookup = gba_lookup;
-    ctx->find = gba_find;
+    ctx->lookup = rt->interpret_all ? interpret_everything : gba_lookup;
+    ctx->find = rt->interpret_all ? NULL : gba_find;
     ctx->runtime = rt;
     ctx->cpsr_ctrl = GBA_MODE_SYS;
     ctx->r[13] = 0x03007F00u;

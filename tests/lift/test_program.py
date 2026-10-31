@@ -33,8 +33,15 @@ def test_every_function_gets_a_prototype_and_a_sorted_dispatch_row():
     for entry in BOTH:
         assert f"uint32_t f_{entry:08x}(GbaCtx *ctx);" in program.prototypes
     rows = [line for line in program.dispatch.splitlines() if line.strip().startswith("{0x")]
-    assert rows == [f"    {{0x{e:08x}u, f_{e:08x}}}," for e in BOTH]
+    assert rows == [f"    {{0x{e:08x}u, 0, f_{e:08x}}}," for e in BOTH]  # ARM state
     assert "GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr)" in program.dispatch
+
+
+def test_a_function_is_found_only_in_the_state_it_was_recompiled_in():
+    thumb = lifted("movs r0, #1\n    bx lr", thumb=True).dispatch
+    assert "    {0x080000c0u, 1, f_080000c0}," in thumb.splitlines()
+    # the same address in the other state goes to gba_missing (the interpreter)
+    assert "return table[mid].thumb == (addr & 1u) ? table[mid].fn : 0;" in thumb
 
 
 def test_prefix_keeps_programs_apart():

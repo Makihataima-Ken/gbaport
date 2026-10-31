@@ -2,8 +2,8 @@
 
 The dispatch table maps each recompiled function's address to its C function;
 ``gba_find`` (prefixed in tests, so several programs can share one binary)
-finds the function for an address with a binary search (bit 0, the CPU state,
-does not matter), or NULL; ``gba_lookup`` hands anything it does not find to the
+finds the function for an address with a binary search, or NULL, also when bit 0
+asks for the other CPU state than the function was recompiled in; ``gba_lookup`` hands anything it does not find to the
 runtime's ``gba_missing``, bit 0 included, which runs it in the interpreter.
 """
 
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 
 from gbaport.analysis.cfg import Program
 from gbaport.analysis.discover import Exploration
+from gbaport.isa.model import Mode
 from gbaport.lift.function import function_name, lift_function
 
 HEADER = "gba_cpu.h"
@@ -41,7 +42,8 @@ def lift_program(program: Program, ex: Exploration, prefix: str = "") -> LiftedP
         a: lift_function(program.functions[a], program, ex, prefix, problems) for a in entries
     }
     unique = tuple(dict.fromkeys(problems))  # a block shared by several functions reports once
-    return LiftedProgram(prefix, prototypes, functions, _dispatch(entries, prefix), unique)
+    thumb = [program.functions[a].mode is Mode.THUMB for a in entries]
+    return LiftedProgram(prefix, prototypes, functions, _dispatch(entries, thumb, prefix), unique)
 
 
 def single_source(lifted: LiftedProgram) -> str:
@@ -72,11 +74,12 @@ def program_files(lifted: LiftedProgram) -> dict[str, str]:
     return files
 
 
-def _dispatch(entries: list[int], prefix: str) -> str:
+def _dispatch(entries: list[int], thumb: list[bool], prefix: str) -> str:
     lines = []
     if entries:
-        lines.append(f"static const struct {{ uint32_t addr; GbaFn fn; }} {prefix}table[] = {{")
-        lines += [f"    {{0x{a:08x}u, {function_name(a, prefix)}}}," for a in entries]
+        lines.append(f"static const struct {{ uint32_t addr, thumb; GbaFn fn; }} {prefix}table[] = {{")
+        lines += [f"    {{0x{a:08x}u, {int(t)}, {function_name(a, prefix)}}},"
+                  for a, t in zip(entries, thumb, strict=True)]
         lines.append("};")
     lines += [
         "",
@@ -91,8 +94,8 @@ def _dispatch(entries: list[int], prefix: str) -> str:
             "    while (lo < hi) {",
             "        uint32_t mid = (lo + hi) / 2;",
             f"        uint32_t found = {prefix}table[mid].addr;",
-            "        if (found == key)",
-            f"            return {prefix}table[mid].fn;",
+            "        if (found == key)  /* in the other state it is code that was not recompiled */",
+            f"            return {prefix}table[mid].thumb == (addr & 1u) ? {prefix}table[mid].fn : 0;",
             "        if (found < key)",
             "            lo = mid + 1;",
             "        else",

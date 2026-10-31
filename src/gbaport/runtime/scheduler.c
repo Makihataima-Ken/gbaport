@@ -153,7 +153,7 @@ static void deliver(GbaRuntime *rt)
     ctx->cycles += 25 + 2 + ctx->n16[8] + ctx->s16[8];
     ctx->prefetched = 0;
     rt->bios_bus = 0xE25EF004u;  /* the opcode at 0x13C, fetched while the handler runs */
-    gba_call(ctx, handler, BIOS_IRQ_RETURN);
+    gba_call(ctx, handler & ~3u, BIOS_IRQ_RETURN);  /* the BIOS's ldr pc: ARM state */
     sp = ctx->r[13];
     for (int i = 0; i < 6; i++)
         ctx->r[saved[i]] = gba_read32(ctx, sp + 4 * i);

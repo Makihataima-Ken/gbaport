@@ -214,6 +214,7 @@ struct GbaRuntime {
     GbaPlace places[GBA_MAX_PLACES];
     uint32_t place_count;
     uint32_t place_slots[2 * GBA_MAX_PLACES];  /* a hash of their addresses: index + 1 */
+    int interpret_all;  /* the host's --interpret-all: no recompiled code runs */
 
     char debug_text[0x101];
     int debug_enabled;
