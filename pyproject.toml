@@ -29,6 +29,7 @@ pythonpath = ["tests"]
 # Unicorn raises and handles access violations internally on Windows, and
 # faulthandler would print each one as a fatal error.
 addopts = "-q -p no:faulthandler"
+markers = ["recompiled_only: a lifter test only recompiled code can pass (it has missing code)"]
 
 [tool.ruff]
 line-length = 100

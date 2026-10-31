@@ -48,7 +48,10 @@ typedef struct GbaCtx {
     uint8_t n16[16], s16[16], n32[16], s32[16];
     uint32_t prefetch;          /* WAITCNT bit 14 */
     uint32_t prefetched;        /* how far the buffer has fetched (mGBA's lastPrefetchedPc) */
-    GbaFn (*lookup)(struct GbaCtx *ctx, uint32_t addr); /* recompiled function at addr */
+    GbaFn (*lookup)(struct GbaCtx *ctx, uint32_t addr); /* what runs the code at addr */
+    GbaFn (*find)(struct GbaCtx *ctx, uint32_t addr);   /* recompiled function at addr, or NULL */
+    uint32_t interp_pc;         /* where gba_interpret starts (bit 0: Thumb state) */
+    uint64_t interpreted;       /* instructions the interpreter has run */
     void *runtime;              /* owned by the runtime */
 } GbaCtx;
 

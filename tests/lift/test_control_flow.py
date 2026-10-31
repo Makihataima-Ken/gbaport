@@ -258,7 +258,8 @@ def test_an_endless_loop_hands_control_to_the_scheduler():
 
 @pytest.mark.parametrize("source,status", [
     (".word 0xe7f000f0", "undefined"),  # an undefined instruction
-    ("ldr r0, ptr\n    bx r0\nptr: .word 0x08000400", "missing"),  # no code was found there
+    pytest.param("ldr r0, ptr\n    bx r0\nptr: .word 0x08000400", "missing",  # no code was found
+                 marks=pytest.mark.recompiled_only),
 ])
 def test_unrecoverable_paths_reach_the_runtime(source, status):
     assert run_lifted([random_case(random.Random(23), source)])[0].status == status

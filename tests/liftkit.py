@@ -7,6 +7,10 @@ both runs end there, and snippets may branch to ``stop`` themselves.
 batch (cached by the hash of its sources) and runs it; ``run_oracle`` executes the
 same cases in Unicorn's ARM926 model. Both report an ``Outcome``.
 
+``run_lifted`` runs the cases recompiled, or with ``MODE = "interpreted"`` (which
+tests/lift/conftest.py sets for a second run of every lifter test) in the runtime's
+interpreter (runtime/interp.c) instead, so both follow the same oracle.
+
 Memory is three 4 KiB windows: the ROM at 0x08000000 (the assembled snippet), EWRAM
 at 0x02000000 and IWRAM at 0x03000000. Unicorn is an ARMv5 core, so tests stay
 inside the behaviour ARMv4T shares with it: aligned memory accesses, and no
@@ -47,6 +51,8 @@ STATUSES = ("stopped", "returned", "undefined", "missing", "fault", "runaway")
 HOST = Path(__file__).with_name("lifthost.c")
 INCLUDE = Path(gbaport.lift.__file__).parent
 CACHE = Path(tempfile.gettempdir()) / "gbaport-liftcache"
+INTERPRETER = [native.RUNTIME / name for name in ("interp.c", "decode.c", "interp.h", "decode.h")]
+MODE = "recompiled"
 _UC_REGS = [getattr(uc_arm, f"UC_ARM_REG_R{n}") for n in range(13)] + [
     uc_arm.UC_ARM_REG_SP,
     uc_arm.UC_ARM_REG_LR,
@@ -136,14 +142,16 @@ def lift_cases(cases: list[Case]) -> str:
     return "\n".join(parts) + "\n"
 
 
-def build(source: str) -> Path:
+def build(source: str, interpret: bool = False) -> Path:
     """Compile the harness with ``source``; reuses an earlier build of the same sources.
 
     A build Windows refuses to start (Smart App Control) is compiled again with a different
     ``salt.c``, as ``gbaport build`` does.
     """
     digest = hashlib.sha1()
-    for text in (source, HOST.read_text(), (INCLUDE / "gba_cpu.h").read_text()):
+    extra = INTERPRETER if interpret else []
+    for text in (source, HOST.read_text(), (INCLUDE / "gba_cpu.h").read_text(),
+                 *(p.read_text() for p in extra)):
         digest.update(text.encode())
     folder = CACHE / digest.hexdigest()[:16]
     exe = folder / "lifthost.exe"
@@ -156,6 +164,9 @@ def build(source: str) -> Path:
         clang(), "-std=c11", "-O1", "-Wall", "-Werror", "-Wno-unused-label", f"-I{INCLUDE}",
         f"-I{HOST.parent}", str(HOST), str(folder / "cases.c"), str(salt), "-o", str(exe),
     ]
+    if interpret:
+        command[1:1] = ["-DLIFTHOST_INTERPRET", f"-DLIFTHOST_ENTRY={CODE_ADDR:#x}u", f"-I{native.RUNTIME}"]
+        command += [str(p) for p in extra if p.suffix == ".c"]
     for _ in range(native.SALTED_REBUILDS + 1):
         salt.write_text(f'const char lifthost_salt[] = "{os.urandom(8).hex()}";\n', encoding="utf-8")
         result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -167,9 +178,9 @@ def build(source: str) -> Path:
     raise RuntimeError(f"Windows refused to start {exe} after {native.SALTED_REBUILDS} rebuilds")
 
 
-def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:
+def run_compiled(source: str, cases: list[Case], interpret: bool = False) -> list[Outcome]:
     """Run ``cases`` with the harness built around ``source`` (it defines HARNESS_CASES)."""
-    exe = build(source)
+    exe = build(source, interpret)
     with tempfile.TemporaryDirectory() as tmp:
         inp, out = Path(tmp) / "in.bin", Path(tmp) / "out.bin"
         with open(inp, "wb") as f:
@@ -193,7 +204,14 @@ def run_compiled(source: str, cases: list[Case]) -> list[Outcome]:
 
 
 def run_lifted(cases: list[Case]) -> list[Outcome]:
+    if MODE == "interpreted":
+        return run_interpreted(cases)
     return run_compiled(lift_cases(cases), cases)
+
+
+def run_interpreted(cases: list[Case]) -> list[Outcome]:
+    """The cases run by the runtime's interpreter, with nothing recompiled."""
+    return run_compiled('#include "lifthost.h"\n', cases, interpret=True)
 
 
 def run_oracle(cases: list[Case]) -> list[Outcome]:
