@@ -63,6 +63,16 @@ def test_play_learn_build_and_play_recompiled(tmp_path, monkeypatch, capsys):
     assert not INTERPRETED.search(run.stderr)  # all of it recompiled now
 
 
+def test_build_learns_the_places_the_window_ran_interpreted(tmp_path, monkeypatch, capsys):
+    rom = game(tmp_path, monkeypatch)
+    run_rom(rom, frames=30, args=("--press", "5:A", "--places", "game.places"))  # as the window
+    program = built(tmp_path)
+    assert "3 places that ran interpreted, from game.places" in capsys.readouterr().out
+    run = run_program([program, "game.gba", "--press", "5:A", "--frames", "30"])
+    assert run.stdout.splitlines()[-1] == "DONE 3 passed, 0 failed"
+    assert not INTERPRETED.search(run.stderr)
+
+
 def test_learn_says_when_the_replay_runs_nothing_interpreted(tmp_path, monkeypatch, capsys):
     rom = game(tmp_path, monkeypatch, "hello")
     run_rom(rom, frames=30, args=("--record", RECORDING))

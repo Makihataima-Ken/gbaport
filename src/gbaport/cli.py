@@ -19,7 +19,7 @@ from gbaport.analysis.traces import Trace, default_trace_paths, load_trace, save
 from gbaport.disasm import disassemble, format_line
 from gbaport.inputs import format_input, load_input
 from gbaport.isa.model import Mode
-from gbaport.learn import learn, recorded_end
+from gbaport.learn import learn, learn_places, recorded_end
 from gbaport.lift.program import HEADER, lift_program
 from gbaport.native.android import ABIS as ANDROID_ABIS
 from gbaport.native.android import (
@@ -358,6 +358,9 @@ def _run_build(args: argparse.Namespace) -> int:
         if args.abi and abi not in args.abi:
             raise ValueError(f"{device.serial} runs {abi} code: build with --abi {abi}, or with "
                              "no --abi")
+    places = Path(args.rom).with_suffix(".places")  # the window's, next to its save
+    if places.exists() and (added := learn_places(places, rom, learned_path(game_code))):
+        print(f"{'learned':<13}{len(added)} places that ran interpreted, from {places}")
     _recompile(args, rom, root / "generated")
     if args.host == "android":
         return _build_android(args, rom, root, device)

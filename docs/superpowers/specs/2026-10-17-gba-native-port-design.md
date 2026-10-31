@@ -28,9 +28,9 @@ Out of scope:
   never committed to the repository.
 - Matching (byte-identical) decompilation.
 - Zero-input support for every ROM. Each game is expected to need a small `game.toml`.
-- Any runtime interpreter or JIT. Code the recompiler did not find is a build-time error
-  that names the address, fixed by adding it to `game.toml`, by importing a trace, or by
-  `gbaport learn`, which replays recorded play natively to find it (Plan 7c).
+- A JIT. Code the recompiler did not find runs in an interpreter instead, and `gbaport
+  learn` or the next `gbaport build` recompiles it (Plan 12; this replaces the earlier "no
+  runtime interpreter", see `2026-10-28-any-rom-design.md`).
 
 ## Key decisions
 
@@ -44,10 +44,11 @@ Out of scope:
    keyed by `addr >> 24`. This sidesteps the 64-bit pointer problem and the fact that iOS
    arm64 reserves the whole low 4 GB (`__PAGEZERO`), so GBA addresses cannot be mapped 1:1.
    Readable decompiled functions use the same accessors until their data is symbolized.
-4. **No runtime fallback.** Unknown indirect-branch targets abort with the address. Coverage
-   comes from static analysis (with an optional sweep of the code that follows code),
-   recorded traces, per-game overrides, and addresses learned by replaying recorded play
-   natively (`gbaport learn`, Plan 7c).
+4. **Recompiled code first, the interpreter for the rest** (Plan 12). Code the build did not
+   find runs in `runtime/interp.c`, which follows the recompiled code's rules exactly; the
+   hosts list where, and `gbaport learn` and `gbaport build` recompile it next time.
+   Coverage comes from static analysis (with an optional sweep of the code that follows
+   code), recorded traces, per-game overrides, and those places.
 5. **Emulators are dev-time test oracles only.** Unicorn (CPU semantics) and mGBA
    (whole-game lockstep) are used by tests and tools, never linked into a shipped app.
 6. **Python tooling, C11 runtime, clang everywhere.** Analysis and code generation are
@@ -100,8 +101,8 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
   A call site sets LR and runs `gba_call(ctx, next, return_address)`: a loop that looks up
   each returned address in a sorted address→function table (`gba_lookup`) and runs it, until
   the chain comes back to the call's return address. A direct `BL` to a recompiled function
-  starts the loop with a direct C call. A lookup miss aborts with the address and the hint
-  to add it to `game.toml`.
+  starts the loop with a direct C call. A lookup miss goes to the runtime's `gba_missing`,
+  which runs the code in the interpreter (Plan 12).
 - **Returns.** A return is just a jump to the return address, so it ends the C call that
   made it; tail calls and jumps through registers return their target and never grow the C
   stack. Comparing against the call site's return address, rather than the LR a function was
@@ -116,8 +117,8 @@ The stages are exposed through one CLI, `gbaport`, with subcommands such as `inf
 - **Timing.** Counted as mGBA counts it (Plan 7a): each instruction adds its fetches at
   the wait states WAITCNT sets, data accesses add their memory's waits (through mGBA's
   model of the prefetch buffer) and DMA its transfer time, each before the next memory
-  access sees the time; loop back-edges and function returns check
-  `ctx->cycles >= ctx->next_event` and run the scheduler, which advances scanlines and
+  access sees the time; taken branches back to an address at or before them and jumps
+  through registers that are not calls check `ctx->cycles >= ctx->next_event` and run the scheduler, which advances scanlines and
   delivers HBlank/VBlank/timer/DMA interrupts by calling the recompiled IRQ handler (address
   read from 0x03007FFC). Wait points (`Halt`, `IntrWait`, `VBlankIntrWait`, and recognised
   busy-wait loops on `VCOUNT`/`DISPSTAT`/`IF`) fast-forward to the next event. VBlank start
@@ -180,6 +181,7 @@ entries it learned by replaying recorded play), is read together with `game.toml
 | Runtime (Plans 4–6) | Self-built test ROMs (clang `--target=armv4t-none-eabi` + `ld.lld`) and public GBA test suites (licence checked before vendoring) | Expected outputs and reference images |
 | Whole game (Plan 7+) | mGBA (dev only) | Per-frame framebuffer and RAM comparison on recorded input sequences |
 | Android (Plan 8) | Test ROMs on the Android emulator (dev only) | The app runs them; drawn buttons press keys; saves survive the app being killed; the frame rate holds |
+| Interpreter (Plan 12) | The lifter's oracles, and recompiled code | The lifter's Unicorn and ARMv4 tests run interpreted too; test ROMs and jsmolka's ROMs give the same lines, pictures and cycles interpreted as recompiled |
 | Coverage (Plan 7c) | The native build itself | A recording of play replays with the same picture each frame, also one recorded on a phone; `gbaport learn` turns a run that stopped at missing code into one that gets through |
 | Decomp (Plan 10) | The recompiled function | Same inputs/state → same outputs/state, on states captured from real play |
 
@@ -205,6 +207,10 @@ depends on what the earlier stages reveal.
 | P9 iOS | Xcode project via CMake generator, signing, same features as Android | IPA runs on device at 60 fps | P7, needs macOS |
 | P10 Decomp loop | Override mechanism, Ghidra headless export, Claude agent loop, function-level differential tester | Functions replaced with tests passing; game still verifies | P7 |
 | P11 Symbolized data (optional) | ROM tables → C structs, GBA pointers → native symbols in decompiled code | Decompiled modules no longer use raw GBA addresses | P10 |
+
+Plans 8b and 12 to 16 follow `2026-10-28-any-rom-design.md` (any ROM to Windows and
+Android: the interpreter, code in RAM by content, no per-game setup, the compatibility
+report, cartridge hardware and the apps).
 
 ## Toolchain
 

@@ -99,7 +99,12 @@ without a window, for tests and scripts. Both programs take:
   compares them with mGBA's);
 - `--record PATH`: record the play: the keys the game is given, as an input file, and the
   save it started from as `PATH.sav`. The window records by default, next to its save
-  file (`roms/mygame.session.input` for `roms/mygame.sav`), each run over the last.
+  file (`roms/mygame.session.input` for `roms/mygame.sav`), each run over the last;
+- `--places PATH`: list there the places code ran interpreted (below), adding to those the
+  file lists already. The window lists them by default next to its save file
+  (`roms/mygame.places`);
+- `--interpret-all`: run the whole game in the interpreter, no recompiled code at all (it
+  must give the same pictures and results: a test of the interpreter).
 
 Lines the game prints through mGBA's debug log go to stdout. The exit status is 0 when
 the window is closed, or when the game executes the BIOS Stop call and nothing wakes it
@@ -119,35 +124,47 @@ some of them for good ("An Application Control policy has blocked this file"). `
 build` checks that the program starts and, when Windows refuses it, links it again with a
 few different bytes, up to 20 times.
 
-The most common runtime error is code the recompiler did not find:
+Code the recompiler did not find runs in the interpreter (`runtime/interp.c`), which
+follows the rules recompiled code follows: the same instructions, the same cycles, and
+interrupts taken at the same instructions (every taken branch back to an address at or
+before it, and every jump through a register that is not a call). The game plays on, more
+slowly there, and when the run ends the program says how much ran interpreted:
 
-    error: no recompiled code at 0x080360b0 (Thumb state, lr = 0x080359e3, frame 4296):
-    gbaport learn finds it from a recording of play, or add it to game.toml [code]
-    thumb_entries
+    interpreted 120394 instructions at 41 places, listed in roms/mygame.places
 
-The window recorded the play that led there, so
+`gbaport build` learns the places in the ROM from the window's list (next to the ROM's save
+file): it adds them to the game's learned entries (`games/<game_code>/learned.toml`, read
+together with `game.toml`), so the build runs them recompiled. `learned.toml` holds
+addresses only and can be committed.
+
+The window also recorded the play, so
 
     uv run python -m gbaport.cli learn roms/mygame.gba
 
 plays it again natively from the save it started from, up to where the play ended (the
 recording's last line says where, and why; an app killed in the background leaves none,
-and then the replay plays 30 seconds past the last key change, or `--frames N`). The
-replay does exactly what the play did, so it stops at the same place; `learn` adds the
-address to the game's learned
-entries (`games/<game_code>/learned.toml`, read together with `game.toml`), builds again
-and replays again, until the replay gets through. Each round takes about 15 seconds for
-Dragon Ball GT Transformation: a rebuild compiles only the code files that changed (code
-goes into files by address, 8 KiB of game code each). Then build the game again and play
-on; `learned.toml` holds addresses only and can be committed. `--input` and `--save` name
-another recording and the save it started from; `--device` takes the recording from the
-phone (below).
+and then the replay plays 30 seconds past the last key change, or `--frames N`), with a
+list of places of its own. The replay does exactly what the play did; `learn` adds every
+place it ran interpreted to the learned entries, those in RAM too, builds again and
+replays again, until nothing runs interpreted. A place that still runs interpreted once
+learned is left out again and named: the analysis cannot recompile code there (code the
+game copied to RAM from bytes the analysis does not know, for example). Each round takes
+about 15 seconds for Dragon Ball GT Transformation: a rebuild compiles only the code files
+that changed (code goes into files by address, 8 KiB of game code each). `--input` and
+`--save` name another recording and the save it started from; `--device` takes the
+recording from the phone (below).
+
+A jump to where no code can be is still a runtime error:
+
+    error: no recompiled code at 0x08100000 (Thumb state, lr = 0x080005c3, frame 0), and
+    none can be there: it is past the end of the ROM
 
 Discovery cannot follow the tables of relative offsets many games call their functions
 through, so for those `game.toml`'s `[code] sweep = true` turns on the sweep: where code
 found so far ends (a return, a jump), the code after it, past literal pools and padding,
 is tried as a function too, and kept only when it decodes as code a compiler emits.
-Addresses can also go into `game.toml` by hand (`thumb_entries` or `entries`, as the
-message says), or come from a trace recorded with mGBA (below).
+Addresses can also go into `game.toml` by hand (`thumb_entries` or `entries`), or come
+from a trace recorded with mGBA (below).
 
 `games/BT4E/game.toml` is an example: Dragon Ball GT Transformation with the sweep, about
 2200 functions. `games/BT4E/walk-right.input` plays it into its first fight, then walks
@@ -221,8 +238,9 @@ handing it to the screen (which can wait there for the display):
 A runtime error, or one that stops the game from starting (a save file of the wrong
 size), shows its message on the screen; the app ends when it is closed.
 
-The app records its play as the window does, in its own storage. When it stops at code
-the recompiler did not find, with the phone still connected:
+The app records its play as the window does, in its own storage, and runs the code the
+recompiler did not find in the interpreter too. To have that code recompiled, with the
+phone still connected:
 
     uv run python -m gbaport.cli learn roms/mygame.gba --device
     uv run python -m gbaport.cli build roms/mygame.gba --host android --install

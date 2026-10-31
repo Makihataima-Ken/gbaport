@@ -66,6 +66,22 @@ def read_places(path: Path, crc32: int) -> list[Place]:
     return places
 
 
+def learn_places(places_file: Path, rom: RomImage, learned: Path) -> list[Place]:
+    """Adds the places in the ROM that ``places_file`` lists to ``learned``; returns those it
+    added. Places in RAM are left to ``learn``, which checks that learning them helps."""
+    sha1 = inspect_rom(rom).sha1
+    arm, thumb = (list(found) for found in (load_learned(learned, sha1) if learned.exists() else ((), ())))
+    added = []
+    for place in read_places(places_file, zlib.crc32(rom.data)):
+        entries = thumb if place.mode is Mode.THUMB else arm
+        if 0x08 <= place.addr >> 24 <= 0x0D and place.addr not in entries:
+            entries.append(place.addr)
+            added.append(place)
+    if added:
+        write_learned(learned, sha1, arm, thumb)
+    return added
+
+
 def learn(rom_path: Path, rom: RomImage, config: GameConfig, traces: tuple[Trace, ...],
           learned: Path, recording: Path, start_save: Path | None, frames: int, work: Path,
           log: Callable[[str], None] = print) -> Learning:
