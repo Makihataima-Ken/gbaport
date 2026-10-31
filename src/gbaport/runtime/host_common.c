@@ -123,10 +123,61 @@ static int replace_file(const char *from, const char *to)
 #endif
 }
 
+/* The places file (--places; the window's is next to its save): where code ran in the
+ * interpreter because the build had not recompiled it, for gbaport learn. A line a place:
+ * its state, address and the frame it first ran in, under a line naming the format and
+ * the ROM's CRC32. The file keeps the places of every run there; one for another ROM
+ * starts again. */
+#define PLACES_FORMAT "gbaport-places/1"
+
+static void load_places(HostOptions *o, GbaRuntime *rt)
+{
+    FILE *f = o->places_path[0] ? open_file(o->places_path, "rb") : NULL;
+    if (!f)
+        return;
+    char line[128], state[8];
+    unsigned crc, addr;
+    unsigned long frame;
+    if (fgets(line, sizeof line, f) && sscanf(line, PLACES_FORMAT " %x", &crc) == 1 &&
+        crc == gba_rom_crc32) {
+        while (fgets(line, sizeof line, f))
+            if (sscanf(line, "%7s %x %lu", state, &addr, &frame) == 3)
+                gba_note_place(rt, addr | (strcmp(state, "thumb") == 0), (uint32_t)frame);
+    }
+    fclose(f);
+    o->places_stored = rt->place_count;
+}
+
+static void store_places(HostOptions *o, GbaRuntime *rt)
+{
+    if (!o->places_path[0] || rt->place_count == o->places_stored)
+        return;
+    char temp[sizeof o->places_path + 4];
+    snprintf(temp, sizeof temp, "%s.new", o->places_path);
+    FILE *f = open_file(temp, "wb");
+    int ok = f && fprintf(f, PLACES_FORMAT " %08x\n", (unsigned)gba_rom_crc32) > 0;
+    for (uint32_t i = 0; ok && i < rt->place_count; i++) {
+        const GbaPlace *p = &rt->places[i];
+        ok = fprintf(f, "%s %08x %u\n", p->addr & 1 ? "thumb" : "arm", (unsigned)(p->addr & ~1u),
+                     (unsigned)p->frame) > 0;
+    }
+    if (f)
+        ok = fclose(f) == 0 && ok;
+    if (ok && replace_file(temp, o->places_path) == 0) {
+        o->places_stored = rt->place_count;
+        return;
+    }
+    if (f)
+        remove_file(temp);
+    fprintf(stderr, "warning: cannot write %s\n", o->places_path);
+    o->places_stored = rt->place_count;  /* said once, until there are more */
+}
+
 /* Writes the save next to its file, then puts it in place: a crash or a failed write
  * leaves the previous save as it was. */
 void host_store_save(HostOptions *o, GbaRuntime *rt)
 {
+    store_places(o, rt);
     uint32_t size;
     uint8_t *data = gba_save_data(rt, &size);
     if (!gba_save_dirty(rt) || size == 0)
@@ -262,6 +313,16 @@ static int load_input(HostOptions *o, const char *path)
     return ok ? 0 : -1;
 }
 
+/* The save's path without ".sav", then suffix. */
+static void beside_save(const HostOptions *o, char *path, size_t size, const char *suffix)
+{
+    snprintf(path, size, "%s", o->save_path);
+    size_t n = strlen(path);
+    if (n > 4 && strcmp(path + n - 4, ".sav") == 0)
+        path[n - 4] = 0;
+    strncat(path, suffix, size - strlen(path) - 1);
+}
+
 int host_parse(HostOptions *o, int argc, char **argv)
 {
     int bad = 0;
@@ -298,6 +359,9 @@ int host_parse(HostOptions *o, int argc, char **argv)
         } else if (strcmp(arg, "--record") == 0 && value) {
             snprintf(o->record_path, sizeof o->record_path, "%s", value);
             i++;
+        } else if (strcmp(arg, "--places") == 0 && value) {
+            snprintf(o->places_path, sizeof o->places_path, "%s", value);
+            i++;
         } else if (strcmp(arg, "--registers") == 0) {
             o->registers = 1;
         } else if (o->window && strcmp(arg, "--scale") == 0 && value) {
@@ -316,21 +380,18 @@ int host_parse(HostOptions *o, int argc, char **argv)
         fprintf(stderr,
                 "usage: %s ROM [--frames N] [--save PATH] [--press FRAME:KEYS]... "
                 "[--input FILE] [--registers] [--screenshot PATH] [--audio PATH] "
-                "[--hashes PATH] [--record PATH]%s\n",
+                "[--hashes PATH] [--record PATH] [--places PATH]%s\n",
                 argv[0], o->window ? " [--scale N] [--fast]" : "");
         return 2;
     }
     if (!o->save_path[0])
         default_save_path(o);
     if (o->window && !o->record_path[0]) {  /* the window records play next to its save */
-        snprintf(o->record_path, sizeof o->record_path, "%s", o->save_path);
-        size_t n = strlen(o->record_path);
-        if (n > 4 && strcmp(o->record_path + n - 4, ".sav") == 0)
-            o->record_path[n - 4] = 0;
-        size_t room = sizeof o->record_path - strlen(o->record_path);
-        strncat(o->record_path, ".session.input", room - 1);
+        beside_save(o, o->record_path, sizeof o->record_path, ".session.input");
         o->record_by_default = 1;
     }
+    if (o->window && !o->places_path[0])  /* and keeps the interpreted places there */
+        beside_save(o, o->places_path, sizeof o->places_path, ".places");
     return 0;
 }
 
@@ -384,6 +445,7 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host)
         fprintf(stderr, "error: %s\n", rt->error);
         return 2;
     }
+    load_places(o, rt);
     uint32_t save_size;
     uint8_t *save = read_file(o->save_path, &save_size);
     if (!save && errno != ENOENT) {
@@ -506,6 +568,10 @@ int host_finish(HostOptions *o, GbaRuntime *rt, GbaEnd end)
             fprintf(stderr, " r%d=%08x", i, (unsigned)ctx->r[i]);
         fprintf(stderr, " cpsr=%08x\n", (unsigned)gba_cpsr(ctx));
     }
+    if (rt->cpu.interpreted)  /* the code the build missed: gbaport learn recompiles it */
+        fprintf(stderr, "interpreted %llu instructions at %u places%s%s\n",
+                (unsigned long long)rt->cpu.interpreted, (unsigned)rt->place_count,
+                o->places_path[0] ? ", listed in " : "", o->places_path);
     if (end == GBA_END_ERROR)
         fprintf(stderr, "error: %s\n", rt->error);
     else if (end == GBA_END_HOST && o->frame_limit && rt->frames >= o->frame_limit)

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "gba_runtime.h"
+#include "interp.h"
 
 #define EWRAM_ENTRY 0x02000000u
 #define BIOS_RESET 0x00000000u  /* never a return address: reaching it is an error */
@@ -41,10 +42,12 @@ int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *h
 static void reset_cpu(GbaRuntime *rt)
 {
     GbaCtx *ctx = &rt->cpu;
-    uint64_t cycles = ctx->cycles;
+    uint64_t cycles = ctx->cycles, interpreted = ctx->interpreted;
     memset(ctx, 0, sizeof *ctx);
     ctx->cycles = cycles;
+    ctx->interpreted = interpreted;
     ctx->lookup = gba_lookup;
+    ctx->find = gba_find;
     ctx->runtime = rt;
     ctx->cpsr_ctrl = GBA_MODE_SYS;
     ctx->r[13] = 0x03007F00u;
@@ -168,13 +171,31 @@ GbaFn gba_missing(GbaCtx *ctx, uint32_t addr)
             ctx->unwind_depth = depth;
             return unwinding;
         }
-    int thumb = addr & 1;
-    gba_fail(gba_rt(ctx),
-             "no recompiled code at 0x%08x (%s state, lr = 0x%08x, frame %lu): gbaport "
-             "learn finds it from a recording of play, or add it to game.toml [code] %s",
-             (unsigned)(addr & ~1u), thumb ? "Thumb" : "ARM", (unsigned)ctx->r[14],
-             (unsigned long)gba_rt(ctx)->frames, thumb ? "thumb_entries" : "entries");
-    return 0;
+    GbaRuntime *rt = gba_rt(ctx);
+    uint32_t thumb = addr & 1, at = thumb ? addr & ~1u : addr & ~3u, region = at >> 24;
+    int rom = region >= 0x08 && region <= 0x0D;
+    if (rom ? (at & 0x01FFFFFFu) >= rt->rom_size : region != 0x02 && region != 0x03 && region != 0x06)
+        gba_fail(rt, "no recompiled code at 0x%08x (%s state, lr = 0x%08x, frame %lu), and none "
+                 "can be there: %s", (unsigned)at, thumb ? "Thumb" : "ARM", (unsigned)ctx->r[14],
+                 (unsigned long)rt->frames,
+                 rom ? "it is past the end of the ROM" : "no memory there holds code");
+    /* Code the build missed: the interpreter runs it, and the place goes on the list. */
+    gba_note_place(rt, at | thumb, (uint32_t)rt->frames);
+    ctx->interp_pc = at | thumb;
+    return gba_interpret;
+}
+
+int gba_note_place(GbaRuntime *rt, uint32_t addr, uint32_t frame)
+{
+    uint32_t mask = 2 * GBA_MAX_PLACES - 1, slot = (addr * 2654435761u >> 8) & mask;
+    for (uint32_t i; (i = rt->place_slots[slot]) != 0; slot = (slot + 1) & mask)
+        if (rt->places[i - 1].addr == addr)
+            return 0;
+    if (rt->place_count == GBA_MAX_PLACES)
+        return 0;
+    rt->places[rt->place_count] = (GbaPlace){addr, frame};
+    rt->place_slots[slot] = ++rt->place_count;
+    return 1;
 }
 
 void gba_undefined(GbaCtx *ctx, uint32_t addr)

@@ -1,10 +1,10 @@
 """Lift a whole analysed program: functions, their prototypes and the dispatch table.
 
 The dispatch table maps each recompiled function's address to its C function;
-``gba_lookup`` (prefixed in tests, so several programs can share one binary)
+``gba_find`` (prefixed in tests, so several programs can share one binary)
 finds the function for an address with a binary search (bit 0, the CPU state,
-does not matter) and hands anything else to the runtime's ``gba_missing``, bit 0
-included.
+does not matter), or NULL; ``gba_lookup`` hands anything it does not find to the
+runtime's ``gba_missing``, bit 0 included, which runs it in the interpreter.
 """
 
 import re
@@ -34,6 +34,7 @@ class LiftedProgram:
 def lift_program(program: Program, ex: Exploration, prefix: str = "") -> LiftedProgram:
     entries = sorted(program.functions)
     prototypes = "".join(f"uint32_t {function_name(a, prefix)}(GbaCtx *ctx);\n" for a in entries)
+    prototypes += f"GbaFn {prefix}gba_find(GbaCtx *ctx, uint32_t addr);\n"
     prototypes += f"GbaFn {prefix}gba_lookup(GbaCtx *ctx, uint32_t addr);\n"
     problems: list[str] = []
     functions = {
@@ -79,9 +80,10 @@ def _dispatch(entries: list[int], prefix: str) -> str:
         lines.append("};")
     lines += [
         "",
-        f"GbaFn {prefix}gba_lookup(GbaCtx *ctx, uint32_t addr)",
+        f"GbaFn {prefix}gba_find(GbaCtx *ctx, uint32_t addr)",
         "{",
         "    uint32_t key = addr & ~1u;",
+        "    (void)ctx;",
     ]
     if entries:
         lines += [
@@ -97,5 +99,14 @@ def _dispatch(entries: list[int], prefix: str) -> str:
             "            hi = mid;",
             "    }",
         ]
-    lines += ["    return gba_missing(ctx, addr);", "}"]
+    lines += [
+        "    return 0;",
+        "}",
+        "",
+        f"GbaFn {prefix}gba_lookup(GbaCtx *ctx, uint32_t addr)",
+        "{",
+        f"    GbaFn fn = {prefix}gba_find(ctx, addr);",
+        "    return fn ? fn : gba_missing(ctx, addr);",
+        "}",
+    ]
     return "\n".join(lines) + "\n"

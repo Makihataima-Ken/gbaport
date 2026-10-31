@@ -1,3 +1,5 @@
+import re
+
 from romtest import build_test_rom, run_rom, run_test
 
 
@@ -24,12 +26,17 @@ def test_the_bios_sound_driver_is_ignored_with_a_warning():
     assert "ignoring the BIOS sound driver (SWI 0x1c)" in run.stderr
 
 
-def test_a_jump_to_code_that_was_not_recompiled_names_the_address():
+def test_code_that_was_not_recompiled_runs_in_the_interpreter():
+    run = run_test("calls", frames=30, args=("--press", "5:A"))  # game.toml lacks its hooks
+    run.assert_passed()
+    assert re.search(r"^interpreted \d+ instructions at 3 places$", run.stderr, re.MULTILINE)
+
+
+def test_a_jump_to_where_there_can_be_no_code_names_the_address():
     run = run_test("err_missing")
     assert run.status == 3
-    assert "no recompiled code at 0x08100000 (Thumb state" in run.stderr
-    assert ", frame 0): gbaport learn finds it" in run.stderr  # from a recording of the play
-    assert "thumb_entries" in run.stderr
+    assert "no recompiled code at 0x08100000 (Thumb state, lr = 0x" in run.stderr
+    assert ", frame 0), and none can be there: it is past the end of the ROM" in run.stderr
 
 
 def test_the_frame_limit_ends_a_game_that_never_stops():

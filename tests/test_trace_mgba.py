@@ -37,13 +37,13 @@ def test_trace_records_the_calls_discovery_could_not_follow(tmp_path, capsys):
     assert out[-1] == f"wrote {tmp_path / 'calls.trace'} ({len(trace.hits)} hits)"
 
 
-def test_a_traced_game_runs_natively(tmp_path):
+def test_a_traced_game_runs_recompiled(tmp_path):
     rom, trace = traced("calls", tmp_path)
-    missing = f"error: no recompiled code at {rom.symbols['hidden_thumb']:#010x}"
-    assert missing in run_rom(rom, frames=30).stderr
+    assert "interpreted" in run_rom(rom, frames=30).stderr  # the calls went to code it missed
     run = run_rom(rom, frames=30, traces=(trace,))
     assert run.status == 0, run.stderr
     assert run.lines[-1] == "DONE 2 passed, 0 failed"
+    assert "interpreted" not in run.stderr
 
 
 def test_trace_plays_an_input_file(tmp_path):

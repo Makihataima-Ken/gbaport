@@ -460,7 +460,7 @@ def _run_verify(args: argparse.Namespace) -> int:
 
 def _add_learn_command(commands) -> None:
     learn_command = commands.add_parser(
-        "learn", help="play a recording of the game again and learn the code it missed"
+        "learn", help="play a recording of the game again and learn the code it ran interpreted"
     )
     learn_command.add_argument("rom", help="path to a .gba file")
     learn_command.add_argument(
@@ -516,15 +516,19 @@ def _run_learn(args: argparse.Namespace) -> int:
     else:  # a play the app's being killed cut short: 30 seconds past its last press
         frames = (presses[-1].frame if presses else 0) + 30 * 60
     learned = learned_path(game_code)
-    found = learn(Path(args.rom), rom, _config(args, rom), _traces(args, rom), learned,
-                  recording, start_save if start_save.exists() else None, frames, work)
-    if found:
-        print(f"{len(found)} addresses learned into {learned}; build the game again to play on")
-    elif ended and ended[1].startswith("no recompiled code"):
+    outcome = learn(Path(args.rom), rom, _config(args, rom), _traces(args, rom), learned,
+                    recording, start_save if start_save.exists() else None, frames, work)
+    for place, why in outcome.interpreted:
+        mode = "Thumb" if place.mode is Mode.THUMB else "ARM"
+        print(f"0x{place.addr:08x} ({mode}) still runs interpreted: {why}")
+    if outcome.learned:
+        print(f"{len(outcome.learned)} places learned into {learned}; build the game again to "
+              "run them recompiled")
+    elif ended and ended[1]:
         raise ValueError(f"the replay did not stop where the recorded play did (frame "
                          f"{ended[0]}: {ended[1]}): was it played with another build or "
                          "game.toml?")
-    else:
+    elif not outcome.interpreted:
         print("the replay played to its end: nothing to learn")
     return 0
 

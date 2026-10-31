@@ -36,6 +36,8 @@ typedef struct {
     void *record_file;          /* the open recording (a FILE *) */
     uint16_t recorded;          /* the keys it holds so far */
     int record_by_default;      /* the window's own recording, not --record's */
+    char places_path[1024];     /* keep the places code ran interpreted there ("": do not) */
+    uint32_t places_stored;     /* how many of them the file holds */
 } HostOptions;
 
 /* Hands the keys to the game (gba_set_keys) and records them when they change. `waking`:
@@ -49,8 +51,9 @@ int host_open(HostOptions *o, GbaRuntime *rt, const GbaHost *host);
 /* Once a frame: the frame's samples (o->sound) and the sound file, the picture's hash,
  * scripted presses due by now, the save file, the frame limit. */
 void host_frame(HostOptions *o, GbaRuntime *rt);
-/* Stores the save file now, if the game changed its save since it was last stored
- * (host_frame does once a second, host_finish at the end). */
+/* Stores the save file now, if the game changed its save since it was last stored, and
+ * the places file if the interpreter found more places (host_frame does once a second,
+ * host_finish at the end). */
 void host_store_save(HostOptions *o, GbaRuntime *rt);
 /* While the game is stopped: applies the next scripted press; 0 when none is left. */
 int host_script_wake(HostOptions *o);

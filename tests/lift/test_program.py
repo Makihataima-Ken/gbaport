@@ -85,4 +85,4 @@ def test_exits_carry_the_state_execution_continues_in():
     assert "t &= ~3u;" in arm
     dispatch = lifted(TWO_FUNCTIONS).dispatch
     assert "uint32_t key = addr & ~1u;" in dispatch
-    assert "return gba_missing(ctx, addr);" in dispatch  # the runtime sees the state bit
+    assert "return fn ? fn : gba_missing(ctx, addr);" in dispatch  # the runtime sees the state bit

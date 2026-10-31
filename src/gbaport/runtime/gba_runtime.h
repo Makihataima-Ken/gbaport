@@ -91,6 +91,13 @@ typedef struct {
 
 typedef struct GbaRuntime GbaRuntime;
 
+/* Where the interpreter ran code the build had not recompiled (gba_missing). */
+#define GBA_MAX_PLACES 16384u
+typedef struct {
+    uint32_t addr;   /* bit 0: Thumb state */
+    uint32_t frame;  /* the frame it first ran in */
+} GbaPlace;
+
 typedef struct {
     void (*frame)(GbaRuntime *rt, void *user);             /* at every VBlank start */
     void (*log)(GbaRuntime *rt, int level, const char *text, void *user);  /* mGBA debug log */
@@ -202,6 +209,12 @@ struct GbaRuntime {
     GbaAudio audio;
     GbaSave save;
 
+    /* The places code ran interpreted from, in the order they first did: what the build
+     * missed (the hosts keep them in a file for gbaport learn). */
+    GbaPlace places[GBA_MAX_PLACES];
+    uint32_t place_count;
+    uint32_t place_slots[2 * GBA_MAX_PLACES];  /* a hash of their addresses: index + 1 */
+
     char debug_text[0x101];
     int debug_enabled;
     unsigned warned;  /* GbaWarning bits already reported */
@@ -217,11 +230,14 @@ extern const uint32_t gba_rom_entry;  /* where the cartridge's entry branch lead
 extern const uint32_t gba_rom_size;
 extern const uint32_t gba_rom_crc32;
 extern const uint32_t gba_save_type;  /* a GbaSaveType */
-GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr);
+GbaFn gba_lookup(GbaCtx *ctx, uint32_t addr);  /* recompiled code, or gba_missing's */
+GbaFn gba_find(GbaCtx *ctx, uint32_t addr);    /* the recompiled function at addr, or NULL */
 
 /* For the host. */
 int gba_init(GbaRuntime *rt, const uint8_t *rom, uint32_t size, const GbaHost *host);
 GbaEnd gba_run(GbaRuntime *rt);
+/* Adds a place to rt->places unless it is there (or the list is full); 1 when added. */
+int gba_note_place(GbaRuntime *rt, uint32_t addr, uint32_t frame);
 void gba_end(GbaRuntime *rt, GbaEnd why);  /* from a callback: ends gba_run */
 void gba_set_keys(GbaRuntime *rt, uint16_t pressed);  /* GBA key bits, 1 = pressed */
 void gba_waitcnt(GbaRuntime *rt, uint16_t value);  /* the wait states WAITCNT sets */

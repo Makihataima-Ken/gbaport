@@ -13,7 +13,8 @@
  * stored as it stops, since nothing changes it until then. In a run limited by --frames,
  * a Stop that no scripted press wakes ends the run instead. The play is recorded (--record)
  * by default next to the save file: game.sav's is game.session.input, and the save it
- * started from game.session.input.sav. The other options and exit statuses are those of
+ * started from game.session.input.sav. The places code ran interpreted go next to it too,
+ * in game.places. The other options and exit statuses are those of
  * host_headless.c.
  *
  * The sound plays on the default sound device: an SDL audio stream takes the GBA's

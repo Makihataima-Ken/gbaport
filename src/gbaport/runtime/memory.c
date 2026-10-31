@@ -115,6 +115,11 @@ void gba_waitcnt(GbaRuntime *rt, uint16_t value)
 
 /* ---- reads ------------------------------------------------------------------------ */
 
+/* The interpreter's instruction fetches (interp.c): code is in RAM, VRAM or the ROM, whose
+ * reads have no side effects. */
+uint32_t gba_fetch16(GbaCtx *ctx, uint32_t addr) { return gba_read16(ctx, addr); }
+uint32_t gba_fetch32(GbaCtx *ctx, uint32_t addr) { return gba_read32(ctx, addr); }
+
 uint32_t gba_read16(GbaCtx *ctx, uint32_t addr)
 {
     GbaRuntime *rt = gba_rt(ctx);
