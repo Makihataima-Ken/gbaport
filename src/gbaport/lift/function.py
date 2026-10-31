@@ -7,8 +7,11 @@ Thumb state. The lookup ignores that bit; a miss reports it, so the user knows
 which state the missing code is in. A call sets LR and runs the callee chain
 with ``gba_call`` until it comes back to the return address; after it,
 ``GBA_UNWOUND`` returns too when code went back to a call further out (a task
-switch). Blocks that loops or switches jump back to check for due events, so long
-loops still let the scheduler run.
+switch). Code checks for due events at every taken branch back to an address at or
+before the branch and at every jump through a register that is not a call, and nowhere
+else: every loop has one of those, so long loops still let the scheduler run, and the
+rule does not depend on where functions begin and end, so the interpreter
+(runtime/interp.c) checks at the same instructions.
 
 Time is counted as mGBA counts it (gba_cpu.h): each instruction costs the fetch of
 the next one at the wait states of the memory the code is in (set by WAITCNT),
@@ -67,31 +70,17 @@ class _FunctionLifter:
         self.order = [fn.entry] + sorted(self.blocks - {fn.entry})
 
     def lift(self) -> str:
-        loop_heads = self._loop_heads()
         lines = [f"uint32_t {function_name(self.fn.entry, self.prefix)}(GbaCtx *ctx)", "{"]
         lines += ["    uint32_t t = 0;", "    (void)t;"]
         for i, start in enumerate(self.order):
             following = self.order[i + 1] if i + 1 < len(self.order) else None
-            lines += self._block(start, following, start in loop_heads)
+            lines += self._block(start, following)
         lines.append("}")
         return "\n".join(lines) + "\n"
 
-    def _loop_heads(self) -> set[int]:
-        """Blocks reached by a backward branch, or by a computed jump."""
-        heads = set()
-        for start in self.blocks:
-            block = self.program.blocks[start]
-            computed = writes_pc(block.instructions[-1])  # a switch may jump anywhere
-            for succ in block.successors:
-                if succ in self.blocks and (succ <= start or computed):
-                    heads.add(succ)
-        return heads
-
-    def _block(self, start: int, following: int | None, loop_head: bool) -> list[str]:
+    def _block(self, start: int, following: int | None) -> list[str]:
         block = self.program.blocks[start]
         lines = [f"{label(start)}:"]
-        if loop_head:
-            lines.append("    GBA_CHECK_EVENTS();")
         prev = self._predecessor(start, block.mode)
         ended = False
         pending = (0, 0, 0)  # the cost of instructions run but not yet added to ctx->cycles
@@ -116,7 +105,7 @@ class _FunctionLifter:
             last = block.instructions[-1]
             nxt = last.addr + last.size
             if nxt != following:
-                lines.append("    " + self._go(nxt, block.mode))
+                lines.append("    " + self._fall(nxt, block.mode))
         return lines
 
     def _static(self, ins: Instruction) -> tuple[int, int, int]:
@@ -155,7 +144,7 @@ class _FunctionLifter:
             refill = f"gba_jumped(ctx, {_refill_expr(ins.target, ins.mode)});"
             if ins.target == after:  # a branch to the next instruction only refills
                 return [refill], False
-            return [refill, self._go(ins.target, ins.mode)], True
+            return [refill, *self._branch(ins)], True
         if op is Op.BL:
             ret = self._return_address(ins)
             set_lr = f"ctx->r[14] = {hexu(ret)};"
@@ -183,7 +172,10 @@ class _FunctionLifter:
         body = effects + self._mask(ins) + ["gba_jumped(ctx, gba_refill(ctx, t));"]
         if links_to_next(prev):  # mov lr, pc just before: a call through a register
             return body + ["gba_call(ctx, t, ctx->r[14]);", "GBA_UNWOUND();"], False
-        return body + self._switch(ins) + ["GBA_EXIT(t);"], True
+        switch = self._switch(ins)
+        if switch:  # the jump's one check, then a case of the function or the dispatcher
+            return body + ["GBA_CHECK_EVENTS();", *switch, "GBA_LEAVE(t);"], True
+        return body + ["GBA_EXIT(t);"], True
 
     def _return_address(self, ins: Instruction) -> int:
         after = ins.addr + ins.size
@@ -195,10 +187,19 @@ class _FunctionLifter:
             return f"gba_call_direct(ctx, {function_name(target, self.prefix)}, {hexu(ret)});"
         return f"gba_call(ctx, {hexu(_in_state(target, mode))}, {hexu(ret)});"
 
-    def _go(self, target: int, mode: Mode) -> str:
+    def _branch(self, ins: Instruction) -> list[str]:
+        """A taken B: a backward one checks for due events (every loop has one)."""
+        target, back = ins.target, ins.target <= ins.addr
+        if target in self.blocks:
+            return ["GBA_CHECK_EVENTS();", f"goto {label(target)};"] if back else [f"goto {label(target)};"]
+        exit_ = "GBA_EXIT" if back else "GBA_LEAVE"
+        return [f"{exit_}({hexu(_in_state(target, ins.mode))});"]
+
+    def _fall(self, target: int, mode: Mode) -> str:
+        """Running on into the next block: no check."""
         if target in self.blocks:
             return f"goto {label(target)};"
-        return f"GBA_EXIT({hexu(_in_state(target, mode))});"
+        return f"GBA_LEAVE({hexu(_in_state(target, mode))});"
 
     def _mask(self, ins: Instruction) -> list[str]:
         if ins.op is Op.BX:

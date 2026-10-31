@@ -120,6 +120,10 @@ static inline void gba_call_direct(GbaCtx *ctx, GbaFn fn, uint32_t ret)
         return gba_exit_; \
     } while (0)
 
+/* Leaving without a check: a forward branch out of the function, or running on into
+ * the code after it. */
+#define GBA_LEAVE(target) return (target)
+
 #define GBA_CHECK_EVENTS() do { if (ctx->cycles >= ctx->next_event) gba_events(ctx); } while (0)
 
 /* ---- timing ------------------------------------------------------------------ */

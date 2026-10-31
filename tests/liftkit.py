@@ -99,6 +99,7 @@ class Outcome:
     cpsr: int
     ewram: bytes
     iwram: bytes
+    checks: int = 0  # how often the code checked for due events (not the oracle's)
 
 
 def random_case(rng: random.Random, source: str, *, thumb: bool = False, **fields) -> Case:
@@ -191,14 +192,14 @@ def run_compiled(source: str, cases: list[Case], interpret: bool = False) -> lis
                 f.write(case.rom().ljust(WINDOW, b"\0")[:WINDOW] + case.ewram + case.iwram)
         subprocess.run([str(exe), str(inp), str(out)], check=True, timeout=30)
         data = out.read_bytes()
-    size = 17 * 4 + 2 * WINDOW
+    size = 18 * 4 + 2 * WINDOW
     outcomes = []
     for i in range(len(cases)):
         chunk = data[i * size : (i + 1) * size]
-        words = struct.unpack_from("<17I", chunk)
-        ram = chunk[68:]
+        words = struct.unpack_from("<18I", chunk)
+        ram = chunk[72:]
         outcomes.append(
-            Outcome(STATUSES[words[0]], words[1:16], words[16], ram[:WINDOW], ram[WINDOW:])
+            Outcome(STATUSES[words[0]], words[1:16], words[16], ram[:WINDOW], ram[WINDOW:], words[17])
         )
     return outcomes
 

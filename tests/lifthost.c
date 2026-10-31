@@ -4,7 +4,8 @@
  *
  * INPUT holds a u32 case count, then per case: u32 case index, u32 r0-r14, u32 CPSR,
  * and the ROM, EWRAM and IWRAM windows (WINDOW bytes each). OUTPUT holds per case:
- * u32 status, u32 r0-r14, u32 CPSR and the EWRAM and IWRAM windows. A program stops
+ * u32 status, u32 r0-r14, u32 CPSR, u32 checks (how often the code checked for due events)
+ * and the EWRAM and IWRAM windows. A program stops
  * at "svc #0xff"; every other way out is a status the tests report.
  *
  * Built with LIFTHOST_INTERPRET, it runs every case in runtime/interp.c instead, from
@@ -27,6 +28,7 @@ enum { STOPPED = 1, RETURNED, UNDEFINED, MISSING, FAULT, RUNAWAY }; /* setjmp re
 
 static uint8_t rom[WINDOW], ewram[WINDOW], iwram[WINDOW];
 static jmp_buf escape;
+static uint32_t checks;  /* every check calls gba_events: next_event stays 0 */
 
 static uint8_t *window(uint32_t addr, uint32_t size, int writing)
 {
@@ -106,9 +108,9 @@ void gba_call_overflow(GbaCtx *ctx, uint32_t ret) { (void)ctx; (void)ret; longjm
 
 void gba_events(GbaCtx *ctx)
 {
+    checks++;
     if (ctx->cycles >= CYCLE_LIMIT)
         longjmp(escape, RUNAWAY);
-    ctx->next_event = CYCLE_LIMIT;
 }
 
 static uint32_t read_u32(FILE *f)
@@ -167,7 +169,7 @@ int main(int argc, char **argv)
         ctx.c = (cpsr >> 29) & 1;
         ctx.v = (cpsr >> 28) & 1;
         ctx.cpsr_ctrl = cpsr & 0x0FFFFFFFu;
-        ctx.next_event = CYCLE_LIMIT;
+        checks = 0;
 #ifdef LIFTHOST_INTERPRET
         ctx.lookup = interpret_everything;
 #else
@@ -190,6 +192,7 @@ int main(int argc, char **argv)
         for (int r = 0; r < 15; r++)
             write_u32(out, ctx.r[r]);
         write_u32(out, gba_cpsr(&ctx));
+        write_u32(out, checks);
         fwrite(ewram, 1, WINDOW, out);
         fwrite(iwram, 1, WINDOW, out);
     }
